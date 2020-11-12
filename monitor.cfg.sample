@@ -1,0 +1,27 @@
+# Configuration for monitor.pl
+delay=0.5
+localtimezone=America/New_York
+
+# Background:
+widget: y=0; x=0; type=diffuse; interval=10; preseed=8
+
+# Clocks:
+widget: y=1; x=63; bg=0,0,0; fg=0,255,0; minutefg=128,255,64; colonfg=0,196,0; borderfg=128,255,128; type=clock; showdate=1; showdow=1; showam=1; dowfg=0,236,0; title=Local-Time; redraw=1
+widget: y=6; x=68; bg=0,0,0; fg=0,128,255; borderfg=96,192,255; type=clock; showseconds=0; colonfg=0,96,128; secondfg=0,96,160; tz=UTC; title=UTC; military=1; redraw=1
+
+# Notepad
+widget: y=1; x=47; type=notepad; title=TODO; bg=180,220,0; fg=0,0,128; borderfg=180,220,0; titlefg=0,0,0; line2=interactive; line3=ping_etc.; line5=color-coded; line6=error_log
+
+# Some bar graphs:
+widget: y=1; x=24; type=bargraph; title=NetworkActivity; bg=0,0,0; fg=0,200,100; bars=20; redraw=1; flutter=5; spikeprob=0.5; spike=25; threshhold=6,9,12,16,20,30
+widget: y=1; x=1; type=bargraph; title=ServerLoad; interval=5; bg=0,0,0; fg=128,150,200; datasource=load; bars=20; palette=rainbow; redraw=1; flutter=15; spikeprob=2; spike=20; avgval=25; maxval=50
+
+# Apache log tail:
+widget: y=9; x=1; type=logtail; title=ApacheLog; redraw=1; logfile=/var/log/apache2/error.log; fg=0,250,250; borderfg=128,255,255; transparent=yes
+
+# Mailcheck:
+widget: y=1; x=76; bg=0,0,64; mainfg=255,96,0; boringfg=127,127,127; DEVcatfg=127,196,250; EVGcatfg=96,255,96; MSCcatfg=255,127,127; borderfg=255,160,0; transparent=yes; type=biff; redraw=1; boxtitle=POP3; popserver=mail.example.com; popusername=mailuser; poppassword=mailpass; contentsizey=6; fromlen=12; subjlen=20; tickspercheck=60
+
+# df:
+widget: y=1; x=121; bg=0,0,0; borderfg=100,100,100; transparent=yes; type=multidf; redraw=1; contentsizex=12; contentsizey=5; showmount=1; titlefg=200,200,200; fslist=root; label1=www; fg1=127,127,255; src2=kevlar; fg2=209,99,99
+

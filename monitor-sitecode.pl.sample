@@ -1,0 +1,59 @@
+#!/usr/bin/perl
+# -*- cperl -*-
+
+sub biff_hilight_msg {
+  my ($hdr) = @_;
+  # return (category, value);
+  # The category is a short user-visible tag that indicates which rule matched.
+  # The config file can also specify category-specific colors.
+  # The value should be 0 for anything you don't really care about,
+  # or a positive integer otherwise.  In principle, higher numbers
+  # mean more important messages; in the current implementation,
+  # all positive values are treated as equal, but that may change.
+  for my $s (@staffemail) {
+    if (index(lc($$hdr{from}), lc $s) >= 0) {
+      return ("WORK", 9);
+    }}
+  for my $subj ("Perl", "Linux", "Apache", "Postgres", "NetHack",
+                "Emacs", "OpenILS", "Evergreen") {
+    if (index(lc($$hdr{subject}), lc($subj)) >= 0) {
+      return ("TECH", 7);
+    }}
+  for my $jonadab ('jonadab'.'@'."columbus.rr.com",
+                   'jonadab.theunsightlyone'.'@'."gmail.com") {
+    if (index(lc($$hdr{from}), lc $jonadab) >= 0) {
+      return ("JDAB", 3);
+    }}
+  return ("JUNK", 0);
+}
+
+sub biff_get_stafflist {
+  # This is considerably simplified from the version we actually use
+  # in Galion, which parses a Courier mail server alias file and
+  # handles the remote (e.g., gmail) addresses that some of our staff
+  # use, the actual POP3 accounts on our server that other staff use,
+  # various aliases that forward to either or both categories of
+  # account, a couple of mailing lists, the fact that we don't use
+  # our four domains in all of the same ways, and the smoke, mirrors,
+  # chewing gum, and bailing twine that hold it all together.  I'm
+  # not going to publish that mess of code, because it's very much
+  # too hacked-together and site-specific to be useful elsewhere.
+  my $remotefile = 'mailadmin@' . 'mail.example.com:/etc/mail/staff.lst';
+  my $localfile  = "staff.lst";
+  my @domain     = ("example.com", "example.net", "example.org", "example.co.uk");
+  system("scp", $remotefile, $localfile);
+  die "Failed to retrieve staff list from mail server" if not -e $localfile;
+  open STAFF, "<", $localfile or die "Unable to read staff file ($localfile): $!";
+  my %staff;
+  while (<STAFF>) {
+    chomp;
+    my $username = $_;
+    for my $d (@domain) {
+      push @staffemail, $username . '@' . $d;
+    }
+  }
+  close STAFF;
+}
+
+
+42;
