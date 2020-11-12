@@ -17,6 +17,7 @@
 # actually up and running at all.
 
 my $thissystem = `hostname` || "Error_$$";
+chomp $thissystem;
 
 my $workdir = "/home/jonadab/monitor";
 my $remote  = "jonadab@" . "cogitation:/home/jonadab/monitor/$thissystem";
