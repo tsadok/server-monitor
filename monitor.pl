@@ -756,13 +756,13 @@ sub domultidf {
           }
         } else {
           logit(" Error: failed to open $file");
-          push @item, +{ label   => "ERROR",
+          push @item, +{ label   => $label,
                          labelfg => $labelfg,
                          dev     => $$w{"src" . $i},
                          mnt     => $$w{"src" . $i},
                          size    => 0,
                          used    => 0,
-                         pct     => 255,
+                         pct     => "ERROR",
                          pctfg   => [255,127,255],
                        }
         }
@@ -962,12 +962,12 @@ sub domultiutc {
           } else {
             logit("Failed to parse UTC time from $file");
             $time   = "ERROR";
-            $timefg = $$w{errorfg} || [255,127,96];
+            $timefg = $$w{errorfg} || [255,127,255];
           }
         } else {
           logit("Failed to open tiem file, $file: $!");
           $time   = "ERROR";
-          $timefg = $$w{errorfg} || [255,127,96];
+          $timefg = $$w{errorfg} || [255,127,255];
         }
       } else {
         $time   = sprintf("%02d:%02d", $localutc->hour(), $localutc->minute());
