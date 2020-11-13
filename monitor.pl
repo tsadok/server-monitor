@@ -957,8 +957,8 @@ sub domultiutc {
                                   );
             my $diffdur = $dt->delta_ms($localutc);
             my $diff    = (($diffdur->minutes() * 60) + $diffdur->seconds()) / 60; # Difference in minutes.
-            $timefg     = ($diff < (30/60)) ? ($$w{offby0fg} || [255,255,255]) :
-              $$w{"offby" . int($diff) . "fg"} || pctclr($diff * 10);
+            $timefg     = ($diff < (90/60)) ? ($$w{offby0fg} || [255,255,255]) :
+              $$w{"offby" . int($diff) . "fg"} || pctclr(int(10 * (log($diff * 30) - 2)));
           } else {
             logit("Failed to parse UTC time from $file");
             $time   = "ERROR";
