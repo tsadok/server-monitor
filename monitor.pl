@@ -16,7 +16,8 @@ require "./monitor-sitecode.pl";
 my %arg = @ARGV;
 my @staffemail;
 my $reset = chr(27) . qq{[0m};
-my $logfile = $arg{logfile} || "monitor.log";
+my $logfile  = $arg{logfile} || "monitor.log";
+my $eightbit = $arg{"256color"} || undef;
 system("clear");
 $|=1;
 
@@ -58,8 +59,8 @@ if ($arg{debugwidgetlist}) {
 
 my ($xmax, $ymax) = Term::Size::chars *STDOUT{IO};
 $xmax--; $ymax--; # Term::Size::chars returns counts, not zero-indexed maxima.
-$arg{xmax} ||= $xmax || 79;
-$arg{ymax} ||= $ymax || 23;
+$xmax = $arg{xmax} ||= $xmax || 79;
+$ymax = $arg{ymax} ||= $ymax || 23;
 logit("Set ymax to $arg{ymax}, xmax to $arg{xmax}");
 
 my $screen = +[
@@ -109,6 +110,10 @@ sub dowidget {
     domultidf($w, $s, @more);
   } elsif ($$w{type} eq "multiutc") {
     domultiutc($w, $s, @more);
+  } elsif ($$w{type} eq "table") {
+    dotablewidget($w, $s, @more);
+  } elsif ($$w{type} eq "agenda") {
+    doagenda($w, $s, @more);
   } else {
     dotext($w, $s, @more);
   }
@@ -120,9 +125,9 @@ sub redraw_widget {
   dowidget($w, $s, "redrawonly" => 1);
 }
 
-sub dobiff {
+sub dooldbiff {
   my ($w, $s, %more) = @_;
-  logit("dobiff(widget ". $$w{id} .")");
+  logit("dooldbiff(widget ". $$w{id} .")");
   $$w{tick}++;
   $$w{contentsizex} ||= 11 + ($$w{fromlen} || 8) + ($$w{subjlen} || 12);
   if ((not ref $$w{__LINES__}) or (not @{$$w{__LINES__}}) or (1 == ($$w{tick} % ($$w{tickspercheck} || 90)))) {
@@ -132,11 +137,68 @@ sub dobiff {
     . " " . $$w{boxtitle} . " "
     . (defined($$w{matchcount}) ? $$w{matchcount} : @{$$w{__LINES__}}) . "/" . $$w{count}
     if $$w{boxtitle};
-  # TODO: use dotable() instead.
   return dologtext($w, $s, %more);
 }
 
+sub dobiff {
+  my ($w, $s, %more) = @_;
+  logit("dobiff(widget ". $$w{id} .")");
+  $$w{tick}++;
+  $$w{contentsizex} ||= 7 + ($$w{fromlen} || 9) + ($$w{subjlen} || 13);
+  $$w{fieldlist}    ||= ["from", "subject", "category"];
+  if ((not ref $$w{__LINES__}) or (not @{$$w{__LINES__}}) or (1 == ($$w{tick} % ($$w{tickspercheck} || 90)))) {
+    $$w{table} = [biffcheck($w, $s, %more)];
+  }
+  $$w{title} = ($$w{tick} % ($$w{tickspercheck} || 90))
+    . " " . $$w{boxtitle} . " "
+    . (defined($$w{matchcount}) ? $$w{matchcount} : @{$$w{table}}) . "/" . $$w{count}
+    if $$w{boxtitle};
+  dotablewidget($w, $s, %more);
+}
+
 sub biffcheck {
+  my ($w, $s, %more) = @_;
+  my @errorline;
+  if (not $$w{popserver})   { push @errorline, "Not configured: popserver"; }
+  if (not $$w{popusername}) { push @errorline, "Not configured: popusername"; }
+  if (not $$w{poppassword}) { push @errorline, "Not configured: poppassword"; }
+  logit("biffcheck(widget ". $$w{id} .": $$w{popserver}:$$w{popusername})");
+  return @errorline if @errorline;
+  use Mail::POP3Client;
+  my $pop = new Mail::POP3Client( HOST     => $$w{popserver},
+                                  USER     => $$w{popusername},
+                                  PASSWORD => $$w{poppassword},
+                                  PORT     => $$w{popport} || 110,
+                                  DEBUG    => $$w{debug},
+                                );
+  $$w{count} = $pop->Count();
+  logit("POP3 count: $$w{count}");
+  return if $$w{count} < 0;
+  my @item = sort {
+    ($$b{value} <=> $$a{value}) or ($$a{index} <=> $$b{index})
+  } map {
+    my $i = $_;
+    my $headers = $pop->Head($i);
+    my $ph = parseheaders($headers);
+    my ($category, $value) = biff_hilight_msg($ph);
+    my $flen = $$w{fromlen} || 8;
+    my $slen = $$w{subjlen} || 12;
+    my $fg   = $$w{$category . "catfg"} || ($value ? $$w{hilightfg} : $$w{boringfg}) || $$w{fg};
+    +{ value      => $value,
+       category   => $category,
+       from       => substr($$ph{from}    . (" " x $flen), 0, $flen),
+       subject    => substr($$ph{subject} . (" " x $slen), 0, $slen),
+       categoryfg => $fg,
+       subjectfg  => $fg,
+       fromfg     => $fg,
+       index      => $i,
+     }
+  } 1 .. $$w{count};
+  $$w{matchcount} = grep { $$_{value} } @item;
+  return @item;
+}
+
+sub oldbiffcheck {
   my ($w, $s, %more) = @_;
   my @errorline;
   if (not $$w{popserver})   { push @errorline, "Not configured: popserver"; }
@@ -235,14 +297,48 @@ sub dologtail {
     }
     local $/ = undef;
     my $tail = <LOGTAIL>; close LOGTAIL;
-    $$w{__LINES__} = +[ map { chomp $_; s/\s+/ /g; $_ } split /\r?\n/, $tail ];
+    $$w{__LINES__} = +[ map { chomp $_; s/\s+/ /g; my $l = $_;
+                              my $c = $$w{fg};
+                              if ($$w{colorize}) {
+                                $c = colorize_logline($l, $w, caller => "dologtail", %more);
+                              }
+                              [$l, $c]
+                            } split /\r?\n/, $tail ];
   }
   dologtext($w, $s, %more);
 }
 
+sub colorize_logline {
+  my ($line, $w, %more) = @_;
+  if ($$w{colorize} eq "perl") {
+    return colorize_perl_logline($line, $w, %more);
+  } # TODO: other types of colorization.
+}
+
+sub colorize_perl_logline {
+  my ($line, $w, %more) = @_;
+  if ($line =~ /uninitialized value/) {
+    return [127,255,64];
+  } elsif ($line =~ /used only once/) {
+    return [64,255,127];
+  } elsif ($line =~ /did you forget/) {
+    return [255, 196, 64];
+  } elsif ($line =~ /wide character/i) {
+    return [160, 224, 255];
+  } elsif (($line =~ /BEGIN not safe/) or
+           ($line =~ /End of script output before headers/)) {
+    return [255,127,127];
+  # TODO: more Perl stuff here.
+  } elsif ($line =~ /script not found or unable to stat/) {
+    return [96, 96, 96];
+  } else {
+    return $$w{fg};
+  }
+}
+
 # TODO: Eventually I want to completely obviate dologtext() in favor
 #       of something more nuanced, that can do color-based hilighting
-#       of relevant bits, or even syntax coloring.
+#       of relevant bits within a line, or even syntax coloring.
 sub dologtext {
   my ($w, $s, %more)  = @_;
   $$w{contentsizex} ||= $xmax - $$w{x} - 2;
@@ -286,8 +382,19 @@ sub dobargraph {
     $$w{minval}       ||= 0;
     $$w{maxval}       ||= $$w{contentsizey} * 8;
     $$w{avgval}       ||= $$w{minval} + (($$w{maxval} - $$w{minval}) / 3);
-    push @{$$w{data}}, getnextbgdatum($w);
+    my $newest          = getnextbgdatum($w);
+    push @{$$w{data}}, $newest;
     shift @{$$w{data}};
+    if ($$w{peakcpu} || $$w{peakmem}) {
+      if (not grep { $$_{number} > $$newest{number} } @{$$w{data}}) {
+        $$w{pslist} = [get_pslist($w)];
+        if ($$w{peakcpu}) {
+          update_peak($w, $$w{peakcpu}, "cpu", $s);
+        }
+        if ($$w{peakmem}) {
+          update_peak($w, $$w{peakmem}, "mem", $s);
+        }
+      }}
   }
   if (not $$w{__DIDBORDER__}) {
     doborder($w, $s);
@@ -302,6 +409,53 @@ sub dobargraph {
                        char => $$w{data}[$b]{char}[($n - 1)], };
     }
   }
+}
+
+sub update_peak {
+  my ($parentwidget, $wchan, $type, $s) = @_;
+  for my $w (grep { $$_{channel} eq $wchan } @widget) {
+    blankrect($s, $$w{x}, $$w{y}, $$w{x} + $$w{contentsizex} + 2, $$w{y} + $$w{contentsizey} + 2);
+    my $now = DateTime->now( time_zone => 'UTC' );
+    $$w{title}  = "top " . $type . " at " . $now->hms();
+    my @list = sort {
+      $$b{"p" . $type} <=> $$a{"p" . $type}
+    } @{$$parentwidget{pslist} || []};
+    $$w{fieldlist} = ["p" . $type,
+                      "args"];
+    $$w{table} = [
+                  map {
+                    my $i = $_;
+                    $list[$i];
+                  } 0 .. $$w{contentsizey} - 1
+                 ];
+  }
+}
+
+sub get_pslist {
+  my ($w) = @_;
+  #my @psfield = qw(pcpu pmem pid nice size args);
+  my @psfield = qw(pcpu pmem args);
+  my @psarg   = ("-e", "-o", (join ",", @psfield));
+  my $psbin   = "/bin/ps";
+  local %ENV;
+  $ENV{PATH}  = undef;
+  open PIPE, "$psbin @psarg |";
+  my @ps;
+  <PIPE>; # Skip the header.
+  while (<PIPE>) {
+    chomp;
+    s/^\s*//;
+    my @v = (split /\s+/, $_, scalar @psfield);
+    my @f = @psfield;
+    my $p = +{};
+    while (@f) {
+      my $v = shift @v;
+      my $f = shift @f;
+      $$p{$f} = $v;
+    }
+    push @ps, $p;
+  }
+  return @ps;
 }
 
 sub createbggradient {
@@ -723,8 +877,12 @@ sub domultidf {
           : "/bin/df |";
         my ($dev, $size, $used, $avail, $pct, $mnt);
         $$w{fslist} ||= "root";
-        if (not ref $$w{fslist}) {
-          $$w{fslist} = [split /,\s*/, $$w{fslist}];
+        #if (not ref $$w{fslist}) {
+        #  $$w{fslist} = [split /,\s*/, $$w{fslist}];
+        #}
+        my $list = $$w{"fs" . $i} || $$w{fslist};
+        if (not ref $list) {
+          $list = [split /,\s*/, $list];
         }
         logit(" label=$label; file=$file");
         if (open PIPE, $file) {
@@ -733,8 +891,8 @@ sub domultidf {
             my $input = $_;
             if ($input =~ m!(\S+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)[%]\s+(.+?)\s*$!) {
               ($dev, $size, $used, $avail, $pct, $mnt) = ($1, $2, $3, $4, $5, $6);
-              my @match = grep { index($dev, $_) >= 0 } @{$$w{fslist}};
-              if ((grep { /^root$/ } @{$$w{fslist}}) and ($mnt eq "/")) { # Magic
+              my @match = grep { index($dev, $_) >= 0 } @{$list};
+              if ((grep { /^root$/ } @{$list}) and ($mnt eq "/")) { # Magic
                 @match = ($dev =~ /(\w+)$/);
               }
               if (@match) {
@@ -774,9 +932,86 @@ sub domultidf {
   }
 }
 
+sub doagenda {
+  my ($w, $s, %arg) = @_;
+  logit("doagenda(widget " . $$w{id} . ")");
+  doborder($w, $s, %arg);
+  $$w{title} ||= "Agenda";
+  my %tzalias = ( localtime => $arg{localtimezone} || "America/New_York" );
+  my $file = catfile($$w{src}, "monitor-agenda.dat");
+  if ((-e $file) and (open AGF, "<", $file)) {
+    my $now = DateTime->now( time_zone => $tzalias{lc($$w{tz})} || $$w{tz} || $tzalias{localtime} );
+    $$w{table} = [ map {
+      my $line = $_;
+      my ($year, $month, $mday, $hour, $minute, $second, $message) = $line
+        =~ m!(\d{4})-(\d+)-(\d+)\s+at\s+(\d+)[:](\d+)[:](\d+)\s+(.*)!;
+      my $dt; eval {
+        $dt = DateTime->new( year      => $year,
+                             month     => $month,
+                             day       => $mday,
+                             hour      => $hour,
+                             minute    => $minute,
+                             time_zone => "UTC"
+                           )->set_time_zone($tzalias{lc($$w{tz})} || $$w{tz} || $tzalias{localtime});
+      };
+      my $when;
+      my $whenfg = $$w{fg};
+      if (ref $dt) {
+        my $hour = ($dt->hour() % 12) || 12;
+        my $min  = $dt->minute();
+        my $ampm = (($dt->hour() >= 12) ? "pm" : "am");
+        if ($dt->ymd() eq $now->ymd()) {
+          if ($min) {
+            $when = $hour . ":" . sprintf("%2d", $min) . $ampm;
+          } elsif ($hour eq "12") {
+            $when = (($dt->hour()) ? "Noon" : "Midnight");
+          } else {
+            $when = $hour . $ampm;
+          }
+          if ($dt->ymd() lt $now->clone()->add( minutes => 90 )->ymd()) {
+            $whenfg = $$w{soonfg} || $$w{todayfg} || $$w{fg};
+          } else {
+            $whenfg = $$w{todayfg} || $$w{fg};
+          }
+        } elsif ($dt->ymd() lt $now->clone()->add( days => 5 )->ymd()) {
+          $when = $dt->day_abbr() . " " . $hour . $ampm;
+          if ($dt->ymd() lt $now->clone()->add( hours => 34 )->ymd()) {
+            $whenfg = $$w{tomorrowfg} || $$w{thisweekfg} || $$w{fg};
+          } else {
+            $whenfg = $$w{thisweekfg} || $$w{fg};
+          }
+        } elsif ($dt->ymd() lt $now->clone()->add( months => 5 )) {
+          $when   = $dt->month_abbr() . " " . sprintf("%02d", $dt->mday());
+          $whenfg = $$w{thisyearfg} || $$w{fg};
+        } else {
+          $when   = $dt->year() . " " . $dt->month_abbr();
+          $whenfg = $$w{distantfg} || $$w{fg};
+        }
+      } else {
+        $when    = "ERROR";
+        $whenfg  = $$w{errorfg} || [255, 127, 255],
+        $message = $line;
+      }
+      +{ when => $when, whenfg => $whenfg, message => $message, };
+    } grep { $_ } map { chomp; $_; } <AGF> ];
+    close AGF;
+  }
+  dotable($w, $s, ["when", "message"], $$w{table} || [], %arg);
+}
+
+sub dotablewidget {
+  my ($w, $s, %arg) = @_;
+  $$w{table}     ||= [];
+  $$w{fieldlist} ||= [];
+  doborder($w, $s, %arg);
+  dotable($w, $s, $$w{fieldlist}, $$w{table}, %arg);
+}
+
 sub dotable {
   my ($w, $s, $fieldlist, $records, %arg) = @_;
   logit("dotable(widget " . $$w{id} . ")");
+  $$w{contentsizey} ||= $ymax - ($$w{y} + 2);
+  $$w{contentsizex} ||= $xmax - ($$w{x} + 2);
   open DEGUG, ">", "monitor-debug-table.txt";
   my @field  = @$fieldlist;
   my @record = @$records;
@@ -796,7 +1031,7 @@ sub dotable {
     my $f = shift @f;
     $len{$f} = 0;
     for my $r (@record) {
-      my $l = length($f);
+      my $l = length($$r{$f});
       $len{$f} = $l if $len{$f} < $l;
     }
     $len{$f}++ if (($len{$f} > 0) and (scalar @f)); # Spacing between fields.
@@ -823,20 +1058,30 @@ sub dotable {
   my $yoffset = 0;
   for my $r (@record) {
     $yoffset++;
-    for my $f (@field) {
-      my $x  = $$w{x} + 1 + $xoffset{$f};
-      my $y  = $$w{y} + $yoffset;
-      my $id = $$w{id} . "_r" . $yoffset . "_" . $f;
-      logit(" Table record $yoffset field $f  \tat row $y col $x: \t'$$r{$f}'   \t<<$id>>");
-      dotext(+{ id          => $id,
-                text        => $$r{$f} || "",
-                x           => $x,
-                y           => $y,
-                fg          => $$r{$f . "fg"} || $$w{$f . "fg"} || $$w{fg},
-                bg          => $$w{bg},
-                transparent => $$w{transparent},
-              }, $s);
-    }
+    if ($yoffset <= $$w{contentsizey}) {
+      for my $f (@field) {
+        my $x  = $$w{x} + 1 + $xoffset{$f};
+        my $y  = $$w{y} + $yoffset;
+        my $id = $$w{id} . "_r" . $yoffset . "_" . $f;
+        logit(" Table record $yoffset field $f  \tat row $y col $x: \t'$$r{$f}'   \t<<$id>>");
+        if (($x <= $xmax) and (($x - $$w{x}) < $$w{contentsizex})) {
+          my $text = $$r{$f} || "";
+          if (length($text) >= ($xmax - $x)) {
+            $text = substr($text, 0, $xmax - $x - 1);
+          }
+          if (length($text) + $x > ($$w{contentsizex} - $$w{x})) {
+            $text = substr($text, 0, $$w{x} + $$w{contentsizex} + 1 - $x);
+          }
+          dotext(+{ id          => $id,
+                    text        => $text,
+                    x           => $x,
+                    y           => $y,
+                    fg          => $$r{$f . "fg"} || $$w{$f . "fg"} || $$w{fg},
+                    bg          => $$w{bg},
+                    transparent => $$w{transparent},
+                  }, $s);
+        }
+      }}
   }
 }
 
@@ -955,8 +1200,11 @@ sub domultiutc {
                                     minute    => $minute,
                                     second    => $second,
                                   );
-            my $diffdur = $dt->delta_ms($localutc);
-            my $diff    = (($diffdur->minutes() * 60) + $diffdur->seconds()) / 60; # Difference in minutes.
+            my $diffdur = ($dt >= $localutc)
+              ? $dt->clone()->subtract_datetime($localutc)
+              : $localutc->clone()->subtract_datetime($dt);
+            my $diff    = (((((($diffdur->months() * 30) # close enough, for color-coding purposes; the important thing is don't wrap to 0.
+                               + $diffdur->days()) * 24 * 60) + $diffdur->minutes()) * 60) + $diffdur->seconds()) / 60; # Difference in minutes.
             $timefg     = ($diff < (90/60)) ? ($$w{offby0fg} || [255,255,255]) :
               $$w{"offby" . int($diff) . "fg"} || pctclr(int(10 * (log($diff * 30) - 2)));
           } else {
@@ -1118,7 +1366,7 @@ sub dotext {
   my ($t, $s) = @_;
   my ($ut, $users) = uptime();
   my %magictext = ( __UPTIME__ => $ut,
-                    __USERS__  => $users . " users", );
+                    __USERS__  => $users );
   if (not $$t{__DONE__}) {
     my $text = (defined $$t{text}) ? $$t{text} : $$t{title} || $$t{type} || "t_$$t{id}";
     $text = $magictext{$text} || $text;
@@ -1181,8 +1429,28 @@ sub logit {
   close LOG;
 }
 
+sub eightbitcolor {
+  my ($red, $green, $blue, $isbg) = @_;
+  my $delimiter = ";";
+  # This calcuation is inline, rather than being a function called
+  # three times, for perf reasons.  Yes, it has a significant impact,
+  # perhaps because it's called for every character cell every iter.
+  my $r = int(($red   + ($isbg ? 0 : 21)) * 6 / 256); $r = 5 if $r > 5;
+  my $g = int(($green + ($isbg ? 0 : 21)) * 6 / 256); $g = 5 if $g > 5;
+  my $b = int(($blue  + ($isbg ? 0 : 21)) * 6 / 256); $b = 5 if $b > 5;
+  if (($r == $g) and ($r == $b)) {
+    my $gray = int(($red + ($isbg ? 0 : 5)) * 24 / 256);
+    $gray = 23 if $gray > 23;
+    return "\x1b[" . ($isbg ? "48" : "38") . $delimiter . "5" . $delimiter . (232 + $gray) . "m";
+  } else {
+    my $cubeval = 16 + (36 * $r) + (6 * $g) + $b;
+    return "\x1b[" . ($isbg ? "48" : "38") . $delimiter . "5" . $delimiter . $cubeval . "m";
+  }
+}
+
 sub rgb { # Return terminal code for a 24-bit color.
   my ($red, $green, $blue, $isbg) = @_;
+  return eightbitcolor($red, $green, $blue, $isbg) if $eightbit;
   my $fgbg = ($isbg) ? 48 : 38;
   my $delimiter = ";";
   return "\x1b[$fgbg$ {delimiter}2$ {delimiter}$ {red}"
