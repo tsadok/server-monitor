@@ -11,6 +11,8 @@ use Data::Dumper;
 #use open ":std";
 #use utf8;
 
+our %bigtextfont;
+require "./monitor-bigtextfonts.pl";
 require "./monitor-sitecode.pl";
 
 my %arg = @ARGV;
@@ -114,9 +116,66 @@ sub dowidget {
     dotablewidget($w, $s, @more);
   } elsif ($$w{type} eq "agenda") {
     doagenda($w, $s, @more);
+  } elsif ($$w{type} eq "bigtext") {
+    bigtext($w, $s, @more);
+  } elsif ($$w{type} eq "sitewidget") {
+    # If you use this, it has to be defined in monitor-sitecode.pl
+    site_widget($w, $s, @more);
   } else {
     dotext($w, $s, @more);
   }
+}
+
+sub bigtext {
+  my ($w, $s, @more) = @_;
+  my $font   = site_bigtext_font($$w{font} || "default") || bigtext_font($$w{font} || "default") || bigtext_font("default");
+  my @char   = split //, $$w{text};
+  my $height = $$font{height} || 0;
+  if (not $height) {
+    $height = 1;
+    for my $c (@char) {
+      my $glyph = $$font{glyph}{$c} || $$font{glyph}{lc $c} || $$font{glyph}{uc $c} || $$font{glyph}{default} || $$font{glyph}{" "};
+      $height = $$glyph{height} if $height < $$glyph{height};
+    }}
+  my $x = $$w{x};
+  my $n = 0;
+  for my $c (@char) {
+    my $glyph = $$font{glyph}{$c} || $$font{glyph}{lc $c} || $$font{glyph}{uc $c} || $$font{glyph}{default} || $$font{glyph}{" "};
+    $x += bigtext_glyph($w, $n++, $glyph, $x, $height, $s, @more);
+    $x += $$font{spacewidth} || 1;
+  }
+}
+sub bigtext_glyph {
+  my ($w, $n, $glyph, $x, $h, $s, @more) = @_;
+  my $width = 0;
+  for my $dy (0 .. ($h - 1)) {
+    my $y = $$w{y} + $dy;
+    my $line = $$glyph{content}[$dy];
+    $width = length($line) if $width < length{$line};
+    dotext(+{ id    => $$w{id} . "_" . $n . "_" . $y,
+              text  => $line,
+              x     => $x,
+              y     => $y,
+              fg    => $$w{fg},
+              bg    => $$w{bg},
+              transparent => $$w{transparent},
+            },
+           $s, @more);
+  }
+  #dotext(+{ id      => $$w{id} . "_" . "glyph" . $n . "_idx",
+  #          x       => $x,
+  #          text    => chr($$glyph{decimal}),
+  #          y       => $$w{y},
+  #          fg      => $$w{fg},
+  #          bg      => $$w{bg},
+  #          transparent => $$w{transparent},
+  #        }, $s, @more);
+  # To allow for combining diacritics, we have to take the font's word for width.
+  return ((defined $$glyph{width}) ? $$glyph{width} : $width);
+}
+sub bigtext_font {
+  my ($fontname) = @_;
+  return $bigtextfont{$fontname};
 }
 
 sub redraw_widget {
@@ -496,6 +555,38 @@ sub hsv2rgb {
   return $c;
 }
 
+sub pingdatum {
+  my ($w) = @_;
+  my $x = $$w{maxval};
+  eval {
+    use Net::DNS;
+    $$w{target}   ||= "jonadab.jumpingcrab.com";
+    $$w{targetip} ||= dnsresolve($$w{target});
+  };
+  if ($$w{targetip}) {
+    eval {
+      use Net::Ping;
+      my $p = Net::Ping->new();
+      $p->hires();
+      my ($ret, $dur, $ip) = $p->ping($$w{targetip}, 1);
+      if ($dur) {
+        $x = $dur; #log(1 + $dur);
+        $x = $$w{maxval} if $x > $$w{maxval};
+      }
+    };
+  }
+  return $x;
+}
+
+sub dnsresolve {
+  my ($name) = @_;
+  my $res   = Net::DNS::Resolver->new();
+  my $reply = $res->search($name, "A");
+  for my $ip ($reply->answer) {
+    return $ip->address if $ip->can("address");
+  }
+}
+
 sub getnextbgdatum {
   my ($w) = @_;
   if ($$w{datasource} eq "load") {
@@ -503,6 +594,9 @@ sub getnextbgdatum {
     $$w{corecount} ||= countcpucores($w);
     return bgdatum($w, $oneminuteload # In principle, this number goes from 0 to the number of CPU cores.
                    * $$w{maxval} / (($$w{headroomratio} || 2) * ($$w{corecount} || 1)));
+  } elsif ($$w{datasource} eq "ping") {
+    my $newdatum = pingdatum($w);
+    return bgdatum($w, $newdatum);
   } else {
     return fakenextbgdatum($w);
   }
