@@ -6,8 +6,8 @@ localtimezone=America/New_York
 widget: y=0; x=0; type=diffuse; interval=10; preseed=8
 
 # Clocks:
-widget: y=1; x=63; bg=0,0,0; fg=0,255,0; minutefg=128,255,64; colonfg=0,196,0; borderfg=128,255,128; type=clock; showdate=1; showdow=1; showam=1; dowfg=0,236,0; title=Local-Time; redraw=1
-widget: y=6; x=68; bg=0,0,0; fg=0,128,255; borderfg=96,192,255; type=clock; showseconds=0; colonfg=0,96,128; secondfg=0,96,160; tz=UTC; title=UTC; military=1; redraw=1
+widget: y=1; x=63; bg=black; fg=green; minutefg=128,255,64; colonfg=0,196,0; borderfg=128,255,128; type=clock; showdate=1; showdow=1; showam=1; dowfg=0,236,0; title=Local-Time; redraw=1
+widget: y=6; x=68; bg=black; fg=azure; borderfg=96,192,255; type=clock; showseconds=0; colonfg=0,96,128; secondfg=0,96,160; tz=UTC; title=UTC; military=1; redraw=1
 
 # Notepad
 widget: y=1; x=47; type=notepad; title=TODO; bg=180,220,0; fg=0,0,128; borderfg=180,220,0; titlefg=0,0,0; line2=interactive; line3=ping_etc.; line5=color-coded; line6=error_log

@@ -55,5 +55,9 @@ sub biff_get_stafflist {
   close STAFF;
 }
 
+sub site_bigtext_font {
+  return;
+}
+
 
 42;

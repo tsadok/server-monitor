@@ -1,0 +1,9 @@
+#!/usr/bin/perl -wT
+# -*- cperl -*-
+
+# This should be the timezone where the largest number of users
+# normally are and will be the default timezone preference for new
+# users if a timezone preference is ever implemented.
+our $timezone = "America/New_York";
+
+42;

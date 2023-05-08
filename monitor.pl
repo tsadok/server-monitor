@@ -11,15 +11,17 @@ use Data::Dumper;
 #use open ":std";
 #use utf8;
 
-our %bigtextfont;
+our (%bigtextfont, $monitorlogfile, @namedcolor, %namedcolor);
+require "./logging.pl";
+require "./widgets.pl";
 require "./monitor-bigtextfonts.pl";
 require "./monitor-sitecode.pl";
 
 my %arg = @ARGV;
 my @staffemail;
 my $reset = chr(27) . qq{[0m};
-my $logfile  = $arg{logfile} || "monitor.log";
-my $eightbit = $arg{"256color"} || undef;
+$monitorlogfile = $arg{logfile} || $monitorlogfile;
+my $eightbit = ($arg{"colordepth"} <= 8) ? 1 : undef;
 system("clear");
 $|=1;
 
@@ -68,21 +70,24 @@ logit("Set ymax to $arg{ymax}, xmax to $arg{xmax}");
 my $screen = +[
                map {
                  [ map {
-                   +{ char => " " };
+                   +{ bg   => "slate",
+                      char => " " };
                  } 0 .. $ymax ]
                } 0 .. $xmax ];
 while (1) {
   logit("************************ *** New Iteration *** ************************");
   for my $w (@widget) {
+    logit("widget $$w{id}, interval=$$w{interval}, ipos=$$w{__INTERVAL_POS__}");
+    $$w{interval} ||= 1;
     if (not $$w{__INTERVAL_POS__}) {
       dowidget($w, $screen);
       $$w{__INTERVAL_POS__} = $$w{interval};
     } else {
       redraw_widget($w, $screen);
     }
-    $$w{__INTERVAL_POS__} = $$w{__INTERVAL_POS__} - 1 if $$w{interval};
+    $$w{__INTERVAL_POS__} = $$w{__INTERVAL_POS__} - 1;
   }
-  drawscreen($screen);
+  drawscreen($screen, %arg);
   select undef, undef, undef, ($arg{delay} || 1);
 }
 exit 0; # Can't Happen
@@ -90,20 +95,14 @@ exit 0; # Can't Happen
 
 sub dowidget {
   my ($w, $s, @more) = @_;
-  if ($$w{type} eq "clock") {
-    doclock($w, $s, @more);
-  } elsif ($$w{type} eq "label") {
-    dotext($w, $s, @more);
+  if (is_standard_widget($w)) {
+    dostandardwidget($w, $s, @more);
   } elsif ($$w{type} eq "tictactoe") {
     dotictactoe($w, $s, @more);
   } elsif ($$w{type} eq "diffuse") {
     dodiffuse($w, $s, @more);
-  } elsif ($$w{type} eq "notepad") {
-    donotepad($w, $s, @more);
   } elsif ($$w{type} eq "bargraph") {
     dobargraph($w, $s, @more);
-  } elsif ($$w{type} eq "logtail") {
-    dologtail($w, $s, @more);
   } elsif ($$w{type} eq "biff") {
     dobiff($w, $s, @more);
   } elsif ($$w{type} eq "df") {
@@ -112,77 +111,23 @@ sub dowidget {
     domultidf($w, $s, @more);
   } elsif ($$w{type} eq "multiutc") {
     domultiutc($w, $s, @more);
-  } elsif ($$w{type} eq "table") {
-    dotablewidget($w, $s, @more);
   } elsif ($$w{type} eq "agenda") {
     doagenda($w, $s, @more);
-  } elsif ($$w{type} eq "bigtext") {
-    bigtext($w, $s, @more);
   } elsif ($$w{type} eq "sitewidget") {
     # If you use this, it has to be defined in monitor-sitecode.pl
     site_widget($w, $s, @more);
   } else {
+    widgetlog("monitor dowidget(): fallthrough, type=$$w{type}, id=$$w{id}");
     dotext($w, $s, @more);
   }
 }
 
-sub bigtext {
-  my ($w, $s, @more) = @_;
-  my $font   = site_bigtext_font($$w{font} || "default") || bigtext_font($$w{font} || "default") || bigtext_font("default");
-  my @char   = split //, $$w{text};
-  my $height = $$font{height} || 0;
-  if (not $height) {
-    $height = 1;
-    for my $c (@char) {
-      my $glyph = $$font{glyph}{$c} || $$font{glyph}{lc $c} || $$font{glyph}{uc $c} || $$font{glyph}{default} || $$font{glyph}{" "};
-      $height = $$glyph{height} if $height < $$glyph{height};
-    }}
-  my $x = $$w{x};
-  my $n = 0;
-  for my $c (@char) {
-    my $glyph = $$font{glyph}{$c} || $$font{glyph}{lc $c} || $$font{glyph}{uc $c} || $$font{glyph}{default} || $$font{glyph}{" "};
-    $x += bigtext_glyph($w, $n++, $glyph, $x, $height, $s, @more);
-    $x += $$font{spacewidth} || 1;
-  }
-}
-sub bigtext_glyph {
-  my ($w, $n, $glyph, $x, $h, $s, @more) = @_;
-  my $width = 0;
-  for my $dy (0 .. ($h - 1)) {
-    my $y = $$w{y} + $dy;
-    my $line = $$glyph{content}[$dy];
-    $width = length($line) if $width < length{$line};
-    dotext(+{ id    => $$w{id} . "_" . $n . "_" . $y,
-              text  => $line,
-              x     => $x,
-              y     => $y,
-              fg    => $$w{fg},
-              bg    => $$w{bg},
-              transparent => $$w{transparent},
-            },
-           $s, @more);
-  }
-  #dotext(+{ id      => $$w{id} . "_" . "glyph" . $n . "_idx",
-  #          x       => $x,
-  #          text    => chr($$glyph{decimal}),
-  #          y       => $$w{y},
-  #          fg      => $$w{fg},
-  #          bg      => $$w{bg},
-  #          transparent => $$w{transparent},
-  #        }, $s, @more);
-  # To allow for combining diacritics, we have to take the font's word for width.
-  return ((defined $$glyph{width}) ? $$glyph{width} : $width);
-}
-sub bigtext_font {
-  my ($fontname) = @_;
-  return $bigtextfont{$fontname};
-}
-
-sub redraw_widget {
-  my ($w, $s) = @_;
-  logit("Using redraw-only mode for widget $$w{id}");
-  dowidget($w, $s, "redrawonly" => 1);
-}
+# moved to widgets.pl
+#sub redraw_widget {
+#  my ($w, $s) = @_;
+#  logit("Using redraw-only mode for widget $$w{id}");
+#  dowidget($w, $s, "redrawonly" => 1);
+#}
 
 sub dooldbiff {
   my ($w, $s, %more) = @_;
@@ -643,7 +588,7 @@ sub bgdatum {
   $number ||= 0;
   my $fg = ""; # Foreground color irrelevant if printing a space.
   for my $c (@{$$w{gradient}}) {
-    $fg = rgb($$c{r}, $$c{g}, $$c{b}) if $$c{min} <= $number;
+    $fg = [$$c{r}, $$c{g}, $$c{b}] if $$c{min} <= $number;
   }
   my @block = ( +{ min => (1/8), char => "▁" },
                 +{ min => (2/8), char => "▂" },
@@ -710,6 +655,7 @@ sub notepad_unescape {
 
 sub dodiffuse {
   my ($w, $s, %more) = @_;
+  logit(qq[dodiffuse($$w{id})]);
   if (not $more{redrawonly}) {
     $$w{x}            ||= 0;
     $$w{y}            ||= 0;
@@ -723,6 +669,7 @@ sub dodiffuse {
     $$w{fudge}        ||= 65535 + int rand 65535;
     $$w{offset}         = (defined $$w{offset}) ? $$w{offset} : 2; # Allow edges to behave as middle
     $$w{c} ||= 0;
+    logit(qq[dodiffuse: ($$w{x},$$w{y})/($$w{xmax},$$w{ymax}); offset=$$w{offset}; fade=$$w{fade}; prob=$$w{paintprob}; fudge=$$w{fudge}; c=$$w{c}]);
     $$w{map} ||= +[ map {
       [ map {
         +{ r => 0, g => 0, b => 0 };
@@ -744,14 +691,17 @@ sub dodiffuse {
 
 sub diffuse_draw {
   my ($w, $s) = @_;
+  logit(qq[diffuse_draw($$w{id})]);
   for my $y (0 .. $$w{ymax}) {
     for my $x (0 .. $$w{xmax}) {
       my $mx = $x + $$w{offset};
       my $my = $y + $$w{offset};
-      $$s[$$w{x} + $x][$$w{y} + $y]
-        = +{ bg => rgb(diffuse_scale($$w{map}[$mx][$my]{r}),
-                       diffuse_scale($$w{map}[$mx][$my]{g}),
-                       diffuse_scale($$w{map}[$mx][$my]{b}), "bg"),
+      $$s[$$w{x} + $x][$$w{y} + $y] = $eightbit
+        # TODO: This hits perf kinda hard and also doesn't work; clearly it is wrong.  Plsfix.
+        ? $namedcolor[int(diffuse_scale($$w{map}[$mx][$my]{r}) * (scalar @namedcolor) / 255)]{name}
+        : +{ bg => [diffuse_scale($$w{map}[$mx][$my]{r}),
+                    diffuse_scale($$w{map}[$mx][$my]{g}),
+                    diffuse_scale($$w{map}[$mx][$my]{b})],
              fg   => "", # irrelevant
              char => " ", };
     }}
@@ -759,6 +709,7 @@ sub diffuse_draw {
 
 sub diffuse_diffuse {
   my ($w) = @_;
+  logit(qq[diffuse_diffuse($$w{id})]);
   my @old = map {
     [ map { my $x = $_;
             +{ r => $$x{r}, g => $$x{g}, b => $$x{b}, };
@@ -794,6 +745,7 @@ sub diffuse_addpaint {
   my $x = $$w{offset} + 1 + int rand($$w{xmax} - 2);
   my $y = $$w{offset} + 1 + int rand($$w{ymax} - 2);
   for (1 .. 1 + int rand 3) {
+    logit(qq[diffuse_addpaint($$w{id}): c=<$$c{r},$$c{g},$$c{b}> at ($x,$y)]);
     for my $z (qw(r g b)) {
       $$w{map}[$x][$y]{$z} += $$c{$z};
     }
@@ -1093,92 +1045,6 @@ sub doagenda {
   dotable($w, $s, ["when", "message"], $$w{table} || [], %arg);
 }
 
-sub dotablewidget {
-  my ($w, $s, %arg) = @_;
-  $$w{table}     ||= [];
-  $$w{fieldlist} ||= [];
-  doborder($w, $s, %arg);
-  dotable($w, $s, $$w{fieldlist}, $$w{table}, %arg);
-}
-
-sub dotable {
-  my ($w, $s, $fieldlist, $records, %arg) = @_;
-  logit("dotable(widget " . $$w{id} . ")");
-  $$w{contentsizey} ||= $ymax - ($$w{y} + 2);
-  $$w{contentsizex} ||= $xmax - ($$w{x} + 2);
-  open DEGUG, ">", "monitor-debug-table.txt";
-  my @field  = @$fieldlist;
-  my @record = @$records;
-  logit(" fields: @field");
-  logit(" record count: " . @record);
-  if ($$w{showheader}) {
-    my $r = +{ map { $_        => $_,
-                       $_ . "fg" => $$w{headerfg} || $$w{fg} || [255,255,255],
-                     } @field };
-    unshift @record, $r;
-  }
-  my %len  = ();
-  my @f    = @field;
-  my $tlen = 0;
-  my $lpad = 0;
-  while (@f) { # Use while instead of foreach so we know if we're on the last one or not.
-    my $f = shift @f;
-    $len{$f} = 0;
-    for my $r (@record) {
-      my $l = length($$r{$f});
-      $len{$f} = $l if $len{$f} < $l;
-    }
-    $len{$f}++ if (($len{$f} > 0) and (scalar @f)); # Spacing between fields.
-    $tlen += $len{$f};
-  }
-  if ($tlen < $$w{contentsizex}) {
-    $lpad = 1;
-  }
-  my %xoffset = ();
-  my $xo = $lpad;
-  for my $f (@field) {
-    $xoffset{$f} = $xo;
-    $xo += $len{$f};
-  }
-  print DEBUG Dumper( +{ w         => $w,
-                         fieldlist => $fieldlist,
-                         records   => $records,
-                         tlen      => $tlen,
-                         lpad      => $lpad,
-                         len       => \%len,
-                         xoffset   => \%xoffset,
-                         %arg,
-                       });
-  my $yoffset = 0;
-  for my $r (@record) {
-    $yoffset++;
-    if ($yoffset <= $$w{contentsizey}) {
-      for my $f (@field) {
-        my $x  = $$w{x} + 1 + $xoffset{$f};
-        my $y  = $$w{y} + $yoffset;
-        my $id = $$w{id} . "_r" . $yoffset . "_" . $f;
-        logit(" Table record $yoffset field $f  \tat row $y col $x: \t'$$r{$f}'   \t<<$id>>");
-        if (($x <= $xmax) and (($x - $$w{x}) < $$w{contentsizex})) {
-          my $text = $$r{$f} || "";
-          if (length($text) >= ($xmax - $x)) {
-            $text = substr($text, 0, $xmax - $x - 1);
-          }
-          if (length($text) + $x > ($$w{contentsizex} - $$w{x})) {
-            $text = substr($text, 0, $$w{x} + $$w{contentsizex} + 1 - $x);
-          }
-          dotext(+{ id          => $id,
-                    text        => $text,
-                    x           => $x,
-                    y           => $y,
-                    fg          => $$r{$f . "fg"} || $$w{$f . "fg"} || $$w{fg},
-                    bg          => $$w{bg},
-                    transparent => $$w{transparent},
-                  }, $s);
-        }
-      }}
-  }
-}
-
 sub dodf {
   my ($w, $s, %arg) = @_;
   $$w{count} ||= 0;
@@ -1408,44 +1274,34 @@ sub doclock {
   }
 }
 
-sub blankrect {
-  my ($s, $minx, $miny, $maxx, $maxy, $bg, $c, $fg) = @_;
-  for my $x ($minx .. $maxx) {
-    for my $y ($miny .. $maxy) {
-      $$s[$x][$y] = +{ bg   => ($bg eq '__TRANSPARENT__') ? $$s[$x][$y]{bg} : $bg,
-                       fg   => ($fg || ""),
-                       char => ((defined $c) ? $c : " "),
-                     };
-    }}}
-
-sub doborder {
-  my ($w, $s) = @_;
-  my $fg = widgetfg($w, "borderfg");
-  $$s[$$w{x}][$$w{y}] = +{ char => "╔", fg => $fg, bg => widgetbg($w, "borderbg", $$s[$$w{x}][$$w{y}]) };
-  $$s[$$w{x} + $$w{contentsizex} + 1][$$w{y}] = +{ char => "╗", fg => $fg, bg => widgetbg($w, "borderbg", $$s[$$w{x} + $$w{contentsizex} + 1][$$w{y}]) };
-  $$s[$$w{x}][$$w{y} + $$w{contentsizey} + 1] = +{ char => "╚", fg => $fg, bg => widgetbg($w, "borderbg", $$s[$$w{x}][$$w{y} + $$w{contentsizey} + 1]) };
-  $$s[$$w{x} + $$w{contentsizex} + 1][$$w{y} + $$w{contentsizey} + 1]
-    = +{ char => "╝", fg => $fg, bg => widgetbg($w, "borderbg", $$s[$$w{x} + $$w{contentsizex} + 1][$$w{y} + $$w{contentsizey} + 1]) };
-  for my $x (1 .. $$w{contentsizex}) {
-    $$s[$$w{x} + $x][$$w{y}] = +{ char => "═", fg => $fg, bg => widgetbg($w, "borderbg", $$s[$$w{x} + $x][$$w{y}]) };
-    $$s[$$w{x} + $x][$$w{y} + $$w{contentsizey} + 1] = +{ char => "═", fg => $fg, bg => widgetbg($w, "borderbg", $$s[$$w{x} + $x][$$w{y} + $$w{contentsizey} + 1]) };
-  }
-  for my $y (1 .. $$w{contentsizey}) {
-    $$s[$$w{x}][$$w{y} + $y] = +{ char => "║", fg => $fg, bg => widgetbg($w, "borderbg", $$s[$$w{x}][$$w{y} + $y]) };
-    $$s[$$w{x} + $$w{contentsizex} + 1][$$w{y} + $y] = +{ char => "║", fg => $fg, bg => widgetbg($w, "borderbg", $$s[$$w{x} + $$w{contentsizex} + 1][$$w{y} + $y]) };
-  }
-  if ($$w{title}) {
-    dotext(+{ id          => $$w{id} . "_title",
-              x           => $$w{x} + 1 + (($$w{contentsizex} > length($$w{title}))
-                                           ? (int(($$w{contentsizex} - length($$w{title})) / 2)) : 0),
-              y           => $$w{y},
-              fg          => $$w{titlefg} || $$w{borderfg} || $$w{fg},
-              bg          => $$w{titlebg} || $$w{borderbg} || $$w{bg},
-              text        => $$w{title},
-              transparent => $$w{transparent},
-            }, $s);
-  }
-}
+#sub doborder {
+#  my ($w, $s) = @_;
+#  my $fg = widgetfg($w, "borderfg");
+#  $$s[$$w{x}][$$w{y}] = +{ char => "╔", fg => $fg, bg => widgetbg($w, "borderbg", $$s[$$w{x}][$$w{y}]) };
+#  $$s[$$w{x} + $$w{contentsizex} + 1][$$w{y}] = +{ char => "╗", fg => $fg, bg => widgetbg($w, "borderbg", $$s[$$w{x} + $$w{contentsizex} + 1][$$w{y}]) };
+#  $$s[$$w{x}][$$w{y} + $$w{contentsizey} + 1] = +{ char => "╚", fg => $fg, bg => widgetbg($w, "borderbg", $$s[$$w{x}][$$w{y} + $$w{contentsizey} + 1]) };
+#  $$s[$$w{x} + $$w{contentsizex} + 1][$$w{y} + $$w{contentsizey} + 1]
+#    = +{ char => "╝", fg => $fg, bg => widgetbg($w, "borderbg", $$s[$$w{x} + $$w{contentsizex} + 1][$$w{y} + $$w{contentsizey} + 1]) };
+#  for my $x (1 .. $$w{contentsizex}) {
+#    $$s[$$w{x} + $x][$$w{y}] = +{ char => "═", fg => $fg, bg => widgetbg($w, "borderbg", $$s[$$w{x} + $x][$$w{y}]) };
+#    $$s[$$w{x} + $x][$$w{y} + $$w{contentsizey} + 1] = +{ char => "═", fg => $fg, bg => widgetbg($w, "borderbg", $$s[$$w{x} + $x][$$w{y} + $$w{contentsizey} + 1]) };
+#  }
+#  for my $y (1 .. $$w{contentsizey}) {
+#    $$s[$$w{x}][$$w{y} + $y] = +{ char => "║", fg => $fg, bg => widgetbg($w, "borderbg", $$s[$$w{x}][$$w{y} + $y]) };
+#    $$s[$$w{x} + $$w{contentsizex} + 1][$$w{y} + $y] = +{ char => "║", fg => $fg, bg => widgetbg($w, "borderbg", $$s[$$w{x} + $$w{contentsizex} + 1][$$w{y} + $y]) };
+#  }
+#  if ($$w{title}) {
+#    dotext(+{ id          => $$w{id} . "_title",
+#              x           => $$w{x} + 1 + (($$w{contentsizex} > length($$w{title}))
+#                                           ? (int(($$w{contentsizex} - length($$w{title})) / 2)) : 0),
+#              y           => $$w{y},
+#              fg          => $$w{titlefg} || $$w{borderfg} || $$w{fg},
+#              bg          => $$w{titlebg} || $$w{borderbg} || $$w{bg},
+#              text        => $$w{title},
+#              transparent => $$w{transparent},
+#            }, $s);
+#  }
+#}
 
 sub uptime {
   my $ut = `uptime`;
@@ -1456,100 +1312,79 @@ sub uptime {
   else { return $ut }
 }
 
-sub dotext {
-  my ($t, $s) = @_;
-  my ($ut, $users) = uptime();
-  my %magictext = ( __UPTIME__ => $ut,
-                    __USERS__  => $users );
-  if (not $$t{__DONE__}) {
-    my $text = (defined $$t{text}) ? $$t{text} : $$t{title} || $$t{type} || "t_$$t{id}";
-    $text = $magictext{$text} || $text;
-    $$t{rows} = 1;
-    $$t{cols} = length $text;
-    my $x = ($$t{x} >= 0) ? $$t{x} : ($arg{xmax} + $$t{x} - $$t{cols});
-    for my $c (split //, $text) {
-      $$s[$x][$$t{y}] = +{ bg   => widgetbg($t, "bg", $$s[$x][$$t{y}]),
-                           fg   => widgetfg($t),
-                           char => $c };
-      $x++;
-    }
-  }
-}
+#sub dotext {
+#  my ($t, $s) = @_;
+#  my ($ut, $users) = uptime();
+#  my %magictext = ( __UPTIME__ => $ut,
+#                    __USERS__  => $users );
+#  if (not $$t{__DONE__}) {
+#    my $text = (defined $$t{text}) ? $$t{text} : $$t{title} || $$t{type} || "t_$$t{id}";
+#    $text = $magictext{$text} || $text;
+#    $$t{rows} = 1;
+#    $$t{cols} = length $text;
+#    my $x = ($$t{x} >= 0) ? $$t{x} : ($arg{xmax} + $$t{x} - $$t{cols});
+#    for my $c (split //, $text) {
+#      $$s[$x][$$t{y}] = +{ bg   => widgetbg($t, "bg", $$s[$x][$$t{y}]),
+#                           fg   => widgetfg($t),
+#                           char => $c };
+#      $x++;
+#    }
+#  }
+#}
 
-sub drawscreen {
-  my ($s) = @_;
-  if ($arg{nohome}) {
-    print $reset . "\n\n";
-  } else {
-    print chr(27) . "[H" . $reset;
-  }
-  for my $y (0 .. $arg{ymax}) {
-    my $lastbg = "";
-    my $lastfg = "";
-    for my $x (0 .. $arg{xmax}) {
-      print "" . ((($$s[$x][$y]{bg} eq $lastbg) ? "" : $$s[$x][$y]{bg}) || "")
-               . ((($$s[$x][$y]{fg} eq $lastfg) ? "" : $$s[$x][$y]{fg}) || "")
-               . (length($$s[$x][$y]{char}) ? $$s[$x][$y]{char} : " ")
-        unless (($x == $arg{xmax}) and
-                ($y == $arg{ymax}) and
-                (not $arg{fullrect}));
-      $lastbg = $$s[$x][$y]{bg};
-      $lastfg = $$s[$x][$y]{fg};
-    }
-    print $reset . "\n" unless $y == $arg{ymax};
-  }
-}
-
-sub widgetfg {
-  my ($w, $fgfield) = @_;
-  $fgfield ||= "fg"; $fgfield = "fg" if not $$w{$fgfield};
-  return (ref $$w{$fgfield}) ? rgb(@{$$w{$fgfield}}) : "";
-}
-
-sub widgetbg {
-  my ($w, $bgfield, $old) = @_;
-  $bgfield ||= "bg"; $bgfield = "bg" if not $$w{$bgfield};
-  if ($$w{transparent}) {
-    return $$old{bg} if $$old{bg};
-  }
-  return (ref $$w{$bgfield}) ? rgb(@{$$w{$bgfield}},"bg") : "";
-}
+#sub widgetfg {
+#  my ($w, $fgfield) = @_;
+#  $fgfield ||= "fg"; $fgfield = "fg" if not $$w{$fgfield};
+#  return (ref $$w{$fgfield}) ? rgb(@{$$w{$fgfield}}) : "";
+#}
+#
+#sub widgetbg {
+#  my ($w, $bgfield, $old) = @_;
+#  $bgfield ||= "bg"; $bgfield = "bg" if not $$w{$bgfield};
+#  if ($$w{transparent}) {
+#    return $$old{bg} if $$old{bg};
+#  }
+#  return (ref $$w{$bgfield}) ? rgb(@{$$w{$bgfield}},"bg") : "";
+#}
 
 sub logit {
-  my ($msg) = @_;
-  open LOG, ">>", $logfile or die "Cannot write $logfile: $!";
-  my $now = DateTime->now( time_zone => "America/New_York" );
-  print LOG $now->hms() . " " . $msg . "\n";
-  close LOG;
+  monitorlog(@_);
 }
+#sub logit {
+#  my ($msg) = @_;
+#  open LOG, ">>", $monitorlogfile or die "Cannot write $monitorlogfile: $!";
+#  my $now = DateTime->now( time_zone => "America/New_York" );
+#  print LOG $now->hms() . " " . $msg . "\n";
+#  close LOG;
+#}
 
-sub eightbitcolor {
-  my ($red, $green, $blue, $isbg) = @_;
-  my $delimiter = ";";
-  # This calcuation is inline, rather than being a function called
-  # three times, for perf reasons.  Yes, it has a significant impact,
-  # perhaps because it's called for every character cell every iter.
-  my $r = int(($red   + ($isbg ? 0 : 21)) * 6 / 256); $r = 5 if $r > 5;
-  my $g = int(($green + ($isbg ? 0 : 21)) * 6 / 256); $g = 5 if $g > 5;
-  my $b = int(($blue  + ($isbg ? 0 : 21)) * 6 / 256); $b = 5 if $b > 5;
-  if (($r == $g) and ($r == $b)) {
-    my $gray = int(($red + ($isbg ? 0 : 5)) * 24 / 256);
-    $gray = 23 if $gray > 23;
-    return "\x1b[" . ($isbg ? "48" : "38") . $delimiter . "5" . $delimiter . (232 + $gray) . "m";
-  } else {
-    my $cubeval = 16 + (36 * $r) + (6 * $g) + $b;
-    return "\x1b[" . ($isbg ? "48" : "38") . $delimiter . "5" . $delimiter . $cubeval . "m";
-  }
-}
-
-sub rgb { # Return terminal code for a 24-bit color.
-  my ($red, $green, $blue, $isbg) = @_;
-  return eightbitcolor($red, $green, $blue, $isbg) if $eightbit;
-  my $fgbg = ($isbg) ? 48 : 38;
-  my $delimiter = ";";
-  return "\x1b[$fgbg$ {delimiter}2$ {delimiter}$ {red}"
-    . "$ {delimiter}$ {green}$ {delimiter}$ {blue}m";
-}
+## sub eightbitcolor {
+##   my ($red, $green, $blue, $isbg) = @_;
+##   my $delimiter = ";";
+##   # This calcuation is inline, rather than being a function called
+##   # three times, for perf reasons.  Yes, it has a significant impact,
+##   # perhaps because it's called for every character cell every iter.
+##   my $r = int(($red   + ($isbg ? 0 : 21)) * 6 / 256); $r = 5 if $r > 5;
+##   my $g = int(($green + ($isbg ? 0 : 21)) * 6 / 256); $g = 5 if $g > 5;
+##   my $b = int(($blue  + ($isbg ? 0 : 21)) * 6 / 256); $b = 5 if $b > 5;
+##   if (($r == $g) and ($r == $b)) {
+##     my $gray = int(($red + ($isbg ? 0 : 5)) * 24 / 256);
+##     $gray = 23 if $gray > 23;
+##     return "\x1b[" . ($isbg ? "48" : "38") . $delimiter . "5" . $delimiter . (232 + $gray) . "m";
+##   } else {
+##     my $cubeval = 16 + (36 * $r) + (6 * $g) + $b;
+##     return "\x1b[" . ($isbg ? "48" : "38") . $delimiter . "5" . $delimiter . $cubeval . "m";
+##   }
+## }
+## 
+## sub rgb { # Return terminal code for a 24-bit color.
+##   my ($red, $green, $blue, $isbg) = @_;
+##   return eightbitcolor($red, $green, $blue, $isbg) if $eightbit;
+##   my $fgbg = ($isbg) ? 48 : 38;
+##   my $delimiter = ";";
+##   return "\x1b[$fgbg$ {delimiter}2$ {delimiter}$ {red}"
+##     . "$ {delimiter}$ {green}$ {delimiter}$ {blue}m";
+## }
 
 # If you see this source code instead of a log file you wanted in your logfile monitor,
 # check whether the user running this script, has read permission on that log file.
