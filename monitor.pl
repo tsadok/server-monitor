@@ -985,7 +985,9 @@ sub domultidf {
             my $input = $_;
             if ($input =~ m!(\S+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)[%]\s+(.+?)\s*$!) {
               ($dev, $size, $used, $avail, $pct, $mnt) = ($1, $2, $3, $4, $5, $6);
-              my @match = grep { index($dev, $_) >= 0 } @{$list};
+              my @match = grep { (index($dev, $_) >= 0) or
+                                   $mnt eq $_
+                               } @{$list};
               if ((grep { /^root$/ } @{$list}) and ($mnt eq "/")) { # Magic
                 @match = ($dev =~ /(\w+)$/);
               }
