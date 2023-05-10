@@ -1,0 +1,12 @@
+#!/usr/bin/perl -wT
+# -*- cperl -*-
+
+use Carp;
+use File::Spec::Functions;
+
+our $logdir         = "/var/log";
+our $widgetlogfile  = catfile($logdir, "perl-term-widgets.log");
+our $verboselogfile = catfile($logdir, "perl-verbose.log");
+our $monitorlogfile = catfile($logdir, "server-monitor.log");
+
+42;
