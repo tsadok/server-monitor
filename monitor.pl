@@ -11,7 +11,7 @@ use Data::Dumper;
 #use open ":std";
 #use utf8;
 
-our (%bigtextfont, $monitorlogfile, @namedcolor, %namedcolor);
+our (%bigtextfont, $monitorlogfile, @namedcolor, %namedcolor, %option, %magictext);
 require "./logging.pl";
 require "./widgets.pl";
 require "./monitor-bigtextfonts.pl";
@@ -25,7 +25,7 @@ my $eightbit = ($arg{"colordepth"} <= 8) ? 1 : undef;
 system("clear");
 $|=1;
 
-my $configfile = $arg{configfile} || "monitor.cfg";
+my $configfile = $arg{configfile} ||= "monitor.cfg";
 my @widget;
 open CFG, "<", $configfile or die "Cannot read config file ($configfile): $!";
 my $n = 0;
@@ -70,18 +70,30 @@ logit("Set ymax to $arg{ymax}, xmax to $arg{xmax}");
 my $screen = +[
                map {
                  [ map {
-                   +{ bg   => "slate",
+                   +{ bg   => ($option{bg} || "black"),
+                      fg   => ($option{fg} || "white"),
                       char => " " };
                  } 0 .. $ymax ]
                } 0 .. $xmax ];
 while (1) {
   logit("************************ *** New Iteration *** ************************");
+  $option{$_} = $arg{$_} for keys %arg;
+  # logit("option{colordepth} == $option{colordepth}");
+  my ($ut, $users) = uptime();
+  %magictext = ( __UPTIME__ => $ut,
+                 __USERS__  => $users . " users", );
   for my $w (@widget) {
     logit("widget $$w{id}, interval=$$w{interval}, ipos=$$w{__INTERVAL_POS__}");
     $$w{interval} ||= 1;
     if (not $$w{__INTERVAL_POS__}) {
-      dowidget($w, $screen);
-      $$w{__INTERVAL_POS__} = $$w{interval};
+      if (($$w{x} <= $xmax) and ($$w{y} <= $ymax)) {
+        if (not $$screen[$$w{x}][$$w{y}]{bg}) {
+          croak("Screen array has no bg at position ($$w{x},$$w{y}), but widget $$w{id} ($$w{title}) is positioned there.  "
+                . Dumper(+{ xmax => $xmax, ymax => $ymax, widget => $w, cell => $$screen[$$w{x}][$$w{y}] }));
+        }
+        dowidget($w, $screen);
+        $$w{__INTERVAL_POS__} = $$w{interval};
+      }
     } else {
       redraw_widget($w, $screen);
     }
@@ -99,8 +111,6 @@ sub dowidget {
     dostandardwidget($w, $s, @more);
   } elsif ($$w{type} eq "tictactoe") {
     dotictactoe($w, $s, @more);
-  } elsif ($$w{type} eq "diffuse") {
-    dodiffuse($w, $s, @more);
   } elsif ($$w{type} eq "bargraph") {
     dobargraph($w, $s, @more);
   } elsif ($$w{type} eq "biff") {
@@ -187,7 +197,7 @@ sub biffcheck {
     my ($category, $value) = biff_hilight_msg($ph);
     my $flen = $$w{fromlen} || 8;
     my $slen = $$w{subjlen} || 12;
-    my $fg   = $$w{$category . "catfg"} || ($value ? $$w{hilightfg} : $$w{boringfg}) || $$w{fg};
+    my $fg   = $$w{$category . "catfg"} || ($value ? $$w{hilightfg} : $$w{boringfg}) || $$w{fg} || $option{fg} || "white";
     +{ value      => $value,
        category   => $category,
        from       => substr($$ph{from}    . (" " x $flen), 0, $flen),
@@ -231,12 +241,12 @@ sub oldbiffcheck {
       push @line, [" " . substr($$ph{from}    . (" " x $flen), 0, $flen)
                    . " | "       . substr($$ph{subject} . (" " x $slen), 0, $slen)
                    . " | " . $category . " ",
-                   $$w{$category . "catfg"} || $$w{hilightfg} || $$w{fg}];
+                   $$w{$category . "catfg"} || $$w{hilightfg} || $$w{fg} || $option{fg} || "grey"];
     } else {
       push @altline, [" " . substr($$ph{from}    . (" " x $flen), 0, $flen)
                       . " | "       . substr($$ph{subject} . (" " x $slen), 0, $slen)
                       . " | " . $category . " ",
-                      $$w{boringfg} || $$w{fg}];
+                      $$w{boringfg} || $$w{fg} || $option{fg} || "grey"];
     }
   }
   $$w{matchcount} = scalar @line;
@@ -302,7 +312,7 @@ sub dologtail {
     local $/ = undef;
     my $tail = <LOGTAIL>; close LOGTAIL;
     $$w{__LINES__} = +[ map { chomp $_; s/\s+/ /g; my $l = $_;
-                              my $c = $$w{fg};
+                              my $c = $$w{fg} || $option{fg} || "wheat";
                               if ($$w{colorize}) {
                                 $c = colorize_logline($l, $w, caller => "dologtail", %more);
                               }
@@ -322,21 +332,21 @@ sub colorize_logline {
 sub colorize_perl_logline {
   my ($line, $w, %more) = @_;
   if ($line =~ /uninitialized value/) {
-    return [127,255,64];
+    return "orange";
   } elsif ($line =~ /used only once/) {
-    return [64,255,127];
+    return "azure";
   } elsif ($line =~ /did you forget/) {
-    return [255, 196, 64];
+    return "red-orange";
   } elsif ($line =~ /wide character/i) {
-    return [160, 224, 255];
+    return "cyan";
   } elsif (($line =~ /BEGIN not safe/) or
            ($line =~ /End of script output before headers/)) {
-    return [255,127,127];
+    return "red";
   # TODO: more Perl stuff here.
   } elsif ($line =~ /script not found or unable to stat/) {
-    return [96, 96, 96];
+    return "black";
   } else {
-    return $$w{fg};
+    return $$w{fg} || $option{fg} || "grey";
   }
 }
 
@@ -356,7 +366,7 @@ sub dologtext {
     if $$w{contentsizey} < scalar @{$$w{__LINES__}};
   for my $n (1 .. $$w{contentsizey}) {
     my $line = $$w{__LINES__}[$n + $offset - 1] || "";
-    my $fg   = $$w{fg};
+    my $fg   = $$w{fg} || $option{fg} || "white";
     if (ref $line) {
       ($line, $fg) = @$line;
     }
@@ -365,7 +375,7 @@ sub dologtext {
               x           => $$w{x} + 1,
               y           => $$w{y} + $n,
               transparent => $$w{transparent},
-              bg          => $$w{bg},
+              bg          => $$w{bg} || $option{bg} || "black",
               fg          => $fg,
             }, $s);
   }
@@ -408,7 +418,7 @@ sub dobargraph {
     for my $b (0 .. ($$w{bars} - 1)) {
       my $x = $$w{x} + 1 + $b;
       my $y = $$w{y} + $$w{contentsizey} + 1 - $n;
-      $$s[$x][$y] = +{ fg   => $$w{data}[$b]{fg} || widgetfg($w),
+      $$s[$x][$y] = +{ fg   => (($arg{colordepth} >= 3) ? ($$w{data}[$b]{fg} || widgetfg($w)) : "white"),
                        bg   => widgetbg($w, undef, $$s[$x][$y]),
                        char => $$w{data}[$b]{char}[($n - 1)], };
     }
@@ -418,7 +428,13 @@ sub dobargraph {
 sub update_peak {
   my ($parentwidget, $wchan, $type, $s) = @_;
   for my $w (grep { $$_{channel} eq $wchan } @widget) {
-    blankrect($s, $$w{x}, $$w{y}, $$w{x} + $$w{contentsizex} + 2, $$w{y} + $$w{contentsizey} + 2);
+    blankrect($s, $$w{x}, $$w{y}, $$w{x} + $$w{contentsizex} + 2, $$w{y} + $$w{contentsizey} + 2,
+              sub {
+                my ($x,$y) = @_;
+                return widgetbg($w, undef, $$s[$x][$y]),
+              },
+              " ",
+              widgetfg($w));
     my $now = DateTime->now( time_zone => 'UTC' );
     $$w{title}  = "top " . $type . " at " . $now->hms();
     my @list = sort {
@@ -586,7 +602,7 @@ sub fakenextbgdatum {
 sub bgdatum {
   my ($w, $number) = @_;
   $number ||= 0;
-  my $fg = ""; # Foreground color irrelevant if printing a space.
+  my $fg = $option{fg} || "white";
   for my $c (@{$$w{gradient}}) {
     $fg = [$$c{r}, $$c{g}, $$c{b}] if $$c{min} <= $number;
   }
@@ -639,7 +655,7 @@ sub donotepad {
                                      (" " x $$w{xmax})), 0, $$w{xmax}),
               x           => $$w{x} + 1,
               y           => $$w{y} + $n,
-              bg          => $$w{bg},
+              bg          => $$w{bg} || $option{bg} || "black",
               fg          => $$w{fg},
               transparent => $$w{transparent},
             }, $s);
@@ -651,119 +667,6 @@ sub notepad_unescape {
   # TODO: improve on this.
   $text =~ tr/_/ /;
   return $text;
-}
-
-sub dodiffuse {
-  my ($w, $s, %more) = @_;
-  logit(qq[dodiffuse($$w{id})]);
-  if (not $more{redrawonly}) {
-    $$w{x}            ||= 0;
-    $$w{y}            ||= 0;
-    $$w{xmax}         ||= $xmax;
-    $$w{ymax}         ||= $ymax;
-    $$w{contentsizex} ||= 1 + $$w{xmax} - $$w{x};
-    $$w{contentsizey} ||= 1 + $$w{ymax} - $$w{y};
-    $$w{title}        ||= "Diffuse";
-    $$w{fade}         ||= (0.05 + rand(0.5));
-    $$w{paintprob}    ||= 5 + int rand 5;
-    $$w{fudge}        ||= 65535 + int rand 65535;
-    $$w{offset}         = (defined $$w{offset}) ? $$w{offset} : 2; # Allow edges to behave as middle
-    $$w{c} ||= 0;
-    logit(qq[dodiffuse: ($$w{x},$$w{y})/($$w{xmax},$$w{ymax}); offset=$$w{offset}; fade=$$w{fade}; prob=$$w{paintprob}; fudge=$$w{fudge}; c=$$w{c}]);
-    $$w{map} ||= +[ map {
-      [ map {
-        +{ r => 0, g => 0, b => 0 };
-      } 0 .. ($$w{ymax} + 2 * $$w{offset}) ]
-    } 0 .. ($$w{xmax} + 2 * $$w{offset}) ];
-    if ($$w{preseed} and not $$w{__DID_PRESEED__}) {
-      $$w{__DID_PRESEED__}++;
-      for (1 .. $$w{preseed}) {
-        diffuse_addpaint($w);
-      }
-    }
-  }
-  diffuse_draw($w, $s);
-  if (not $more{redrawonly}) {
-    diffuse_diffuse($w);
-    diffuse_addpaint($w) if ($$w{paintprob} > rand 100);
-  }
-}
-
-sub diffuse_draw {
-  my ($w, $s) = @_;
-  logit(qq[diffuse_draw($$w{id})]);
-  for my $y (0 .. $$w{ymax}) {
-    for my $x (0 .. $$w{xmax}) {
-      my $mx = $x + $$w{offset};
-      my $my = $y + $$w{offset};
-      $$s[$$w{x} + $x][$$w{y} + $y] = $eightbit
-        # TODO: This hits perf kinda hard and also doesn't work; clearly it is wrong.  Plsfix.
-        ? $namedcolor[int(diffuse_scale($$w{map}[$mx][$my]{r}) * (scalar @namedcolor) / 255)]{name}
-        : +{ bg => [diffuse_scale($$w{map}[$mx][$my]{r}),
-                    diffuse_scale($$w{map}[$mx][$my]{g}),
-                    diffuse_scale($$w{map}[$mx][$my]{b})],
-             fg   => "", # irrelevant
-             char => " ", };
-    }}
-}
-
-sub diffuse_diffuse {
-  my ($w) = @_;
-  logit(qq[diffuse_diffuse($$w{id})]);
-  my @old = map {
-    [ map { my $x = $_;
-            +{ r => $$x{r}, g => $$x{g}, b => $$x{b}, };
-          } @$_ ]
-  } @{$$w{map}};
-  for my $x (2 .. ($$w{xmax} + (2 * $$w{offset}) - 2)) {
-    for my $y (1 .. ($$w{ymax} + (2 * $$w{offset}) - 1)) {
-      for my $color (qw(r g b)) {
-        $$w{map}[$x][$y]{$color} = abs(((1 * $old[$x - 2][$y - 1]{$color}) +
-                                        (2 * $old[$x - 2][$y]{$color})     +
-                                        (1 * $old[$x - 2][$y + 1]{$color}) +
-                                        (2 * $old[$x - 1][$y - 1]{$color}) +
-                                        (3 * $old[$x - 1][$y]{$color})     +
-                                        (2 * $old[$x - 1][$y + 1]{$color}) +
-                                        (3 * $old[$x][$y - 1]{$color})     +
-                                        (5 * $old[$x][$y]{$color})         +
-                                        (3 * $old[$x][$y + 1]{$color})     +
-                                        (2 * $old[$x + 1][$y - 1]{$color}) +
-                                        (3 * $old[$x + 1][$y]{$color})     +
-                                        (2 * $old[$x + 1][$y + 1]{$color}) +
-                                        (1 * $old[$x + 2][$y - 1]{$color}) +
-                                        (2 * $old[$x + 2][$y]{$color})     +
-                                        (1 * $old[$x + 2][$y + 1]{$color}))
-                                       / (33 + $$w{fade}));
-        # Fix floating-point underflow:
-        $$w{map}[$x][$y]{$color} = int($$w{map}[$x][$y]{$color} * $$w{fudge}) / $$w{fudge};
-      }}}
-}
-
-sub diffuse_addpaint {
-  my ($w) = @_;
-  my $c = +{ map { ( $_ => rand 5000 ) } qw(r g b) };
-  my $x = $$w{offset} + 1 + int rand($$w{xmax} - 2);
-  my $y = $$w{offset} + 1 + int rand($$w{ymax} - 2);
-  for (1 .. 1 + int rand 3) {
-    logit(qq[diffuse_addpaint($$w{id}): c=<$$c{r},$$c{g},$$c{b}> at ($x,$y)]);
-    for my $z (qw(r g b)) {
-      $$w{map}[$x][$y]{$z} += $$c{$z};
-    }
-    $x += (($x > ($$w{xmax} / 2)) ? -1 : 1) * (1 + int rand ($$w{xsplatter} || $$w{splatter} || 5));
-    $y += (($y > ($$w{ymax} / 2)) ? -1 : 1) * (1 + int rand ($$w{ysplatter} || $$w{splatter} || 3));
-  }
-}
-
-sub diffuse_scale {
-  my ($v) = @_;
-  return 0 if $v <= 0;
-  my $ln = log($v * 1000);
-  my $sqr = $ln * $ln;
-  if ($sqr > 255) {
-    return 255;
-  } else {
-    return int $sqr;
-  }
 }
 
 sub dotictactoe {
@@ -785,12 +688,16 @@ sub dotictactoe {
       if $$w{debugiter};
     doborder($w,$s);
     blankrect($s, $$w{x} + 1, $$w{y} + 1, $$w{x} + $$w{contentsizex}, $$w{y} + $$w{contentsizey},
-              $$w{transparent} ? '__TRANSPARENT__' : widgetbg($w, "boardbg"));
+              $$w{transparent} ? '__TRANSPARENT__' : sub { my ($x,$y) = @_;
+                                                           return widgetbg($w, "boardbg", $$s[$x][$y])
+                                                         });
     # We're kind of abusing blankrect() to paint foreground here:
     blankrect($s, $$w{x} + $$w{paddingx} + 1, $$w{y} + $$w{paddingy} + 1,
               $$w{x} + $$w{paddingx} + ($$w{squaresizex} * $$w{cols}) + 2,
               $$w{y} + $$w{paddingy} + ($$w{squaresizey} * $$w{rows}) + 2,
-              "", ($$w{boardchar} || "█"), widgetfg($w, "boardfg", "boardbg"));
+              sub { my ($x,$y) = @_;
+                    return widgetbg($w, "boardbg", $$s[$x][$y])   },
+              ($$w{boardchar} || "█"), widgetfg($w, "boardfg", "boardbg"));
     tictactoe_clearboard($w,$s);
     $$w{__DIDBOARD__} = 1 unless $$w{redraw};
   }
@@ -800,9 +707,11 @@ sub dotictactoe {
       my $tilex  = $$w{x} + $$w{paddingx} + (($col - 1) * ($$w{squaresizex} + 1)) + 1;
       my $tiley  = $$w{y} + $$w{paddingy} + (($row - 1) * ($$w{squaresizey} + 1)) + 1;
       my $symbol = $$w{board}[$col - 1][$row - 1];
-      $$s[$tilex + int($$w{squaresizex} / 2)][$tiley + int($$w{squaresizey} / 2)] =
+      my $x = $tilex + int($$w{squaresizex} / 2);
+      my $y = $tiley + int($$w{squaresizey} / 2);
+      $$s[$x][$y] =
         +{ fg    => widgetfg($w, (lc($symbol) || "blankspace") . "fg"),
-           bg    => widgetbg($w, (lc($symbol) || "blankspace") . "bg"),
+           bg    => widgetbg($w, (lc($symbol) || "blankspace") . "bg", $$s[$x][$y]),
            char  => $symbol, };
     }
   }
@@ -901,7 +810,10 @@ sub tictactoe_clearboard {
       my $tilex = $$w{x} + $$w{paddingx} + (($col - 1) * ($$w{squaresizex} + 1)) + 1;
       my $tiley = $$w{y} + $$w{paddingy} + (($row - 1) * ($$w{squaresizey} + 1)) + 1;
       blankrect($s, $tilex, $tiley, $tilex + $$w{squaresizex} - 1, $tiley + $$w{squaresizey} - 1,
-                widgetbg($w, "tilebg"), ($$w{tilechar} || " "), widgetfg($w, "tilefg"));
+                sub {
+                  my ($x, $y) = @_;
+                  return widgetbg($w, "tilebg", $$s[$x][$y]); },
+                ($$w{tilechar} || " "), widgetfg($w, "tilefg"));
     }}
 }
 
@@ -917,9 +829,10 @@ sub domultidf {
     for my $i (1 .. $$w{contentsizey}) {
       if ($$w{"label" . $i} or $$w{"src" . $i} or $$w{"fg" . $i}) {
         my $label   = $$w{"label" . $i} || $$w{"src" . $i} || "";
-        my $labelfg = $$w{"fg" . $i} || $$w{fg} || [127,127,127];
+        my $labelfg = $$w{"fg" . $i} || $$w{fg} || "grey";
+        my $datadir = $$w{datadir} || "./";
         my $file = $$w{"src" . $i}
-          ? catfile($$w{"src" . $i}, "monitor-df.dat")
+          ? catfile($datadir, $$w{"src" . $i}, "monitor-df.dat")
           : "/bin/df |";
         my ($dev, $size, $used, $avail, $pct, $mnt);
         $$w{fslist} ||= "root";
@@ -937,7 +850,7 @@ sub domultidf {
             my $input = $_;
             if ($input =~ m!(\S+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)[%]\s+(.+?)\s*$!) {
               ($dev, $size, $used, $avail, $pct, $mnt) = ($1, $2, $3, $4, $5, $6);
-              my @match = grep { index($dev, $_) >= 0 } @{$list};
+              my @match = grep { (index($dev, $_) >= 0) or ($mnt eq $_) } @{$list};
               if ((grep { /^root$/ } @{$list}) and ($mnt eq "/")) { # Magic
                 @match = ($dev =~ /(\w+)$/);
               }
@@ -1103,7 +1016,7 @@ sub dodf {
               transparent => $$w{transparent},
               x           => $$w{x} + 1,
               y           => $$w{y} + $yoffset,
-              bg          => $$w{bg},
+              bg          => $$w{bg} || $option{bg} || "black",
               fg          => pctclr($$f{pct}),
             }, $s);
   }
@@ -1113,18 +1026,18 @@ sub dodf {
 sub pctclr {
   my ($pct) = @_;
   if ($pct =~ /\d+/) {
-    return (($pct < 10) ? [96,96,224] :
-            ($pct < 20) ? [0,160,255] :
-            ($pct < 30) ? [0,180,180] :
-            ($pct < 40) ? [0,200,0] :
-            ($pct < 50) ? [200,255,0] :
-            ($pct < 60) ? [255,255,0] :
-            ($pct < 70) ? [255,160,0] :
-            ($pct < 80) ? [255,96,0] :
-            ($pct < 90) ? [255,64,64] :
-            ($pct < 95) ? [250,0,128] :
-            ($pct < 98) ? [255,96,255] :
-            [200,96,255])
+    return (($pct < 10) ? "blue" :
+            ($pct < 20) ? "azure" :
+            ($pct < 30) ? "cyan" :
+            ($pct < 40) ? "teal" :
+            ($pct < 50) ? "green" :
+            ($pct < 60) ? "spring-green" :
+            ($pct < 70) ? "yellow" :
+            ($pct < 80) ? "orange" :
+            ($pct < 90) ? "red-orange" :
+            ($pct < 95) ? "red" :
+            ($pct < 98) ? "purple-red" :
+            "magenta");
   } else {
     return [200,96,255];
   }
@@ -1140,9 +1053,10 @@ sub domultiutc {
   for my $i (1 .. $$w{contentsizey}) {
     if ($$w{"label" . $i} or $$w{"src" . $i} or $$w{"fg" . $i}) {
       my $label   = $$w{"label" . $i} || $$w{"src" . $i} || "";
-      my $labelfg = $$w{"fg" . $i} || $$w{fg} || [127,127,127];
+      my $labelfg = $$w{"fg" . $i} || $$w{fg} || "grey";
+      my $datadir = $$w{datadir} || "./";
       my $file = $$w{"src" . $i}
-        ? catfile($$w{"src" . $i}, "monitor-utc.dat")
+        ? catfile($datadir, $$w{"src" . $i}, "monitor-utc.dat")
         : undef;
       logit(" label=$label; file=$file");
       my ($time, $timefg);
@@ -1165,21 +1079,21 @@ sub domultiutc {
               : $localutc->clone()->subtract_datetime($dt);
             my $diff    = (((((($diffdur->months() * 30) # close enough, for color-coding purposes; the important thing is don't wrap to 0.
                                + $diffdur->days()) * 24 * 60) + $diffdur->minutes()) * 60) + $diffdur->seconds()) / 60; # Difference in minutes.
-            $timefg     = ($diff < (90/60)) ? ($$w{offby0fg} || [255,255,255]) :
+            $timefg     = ($diff < (90/60)) ? ($$w{offby0fg} || $$w{fg} || $option{fg} || "white") :
               $$w{"offby" . int($diff) . "fg"} || pctclr(int(10 * (log($diff * 30) - 2)));
           } else {
             logit("Failed to parse UTC time from $file");
             $time   = "ERROR";
-            $timefg = $$w{errorfg} || [255,127,255];
+            $timefg = $$w{errorfg} || "magenta";
           }
         } else {
           logit("Failed to open tiem file, $file: $!");
           $time   = "ERROR";
-          $timefg = $$w{errorfg} || [255,127,255];
+          $timefg = $$w{errorfg} || "magenta";
         }
       } else {
         $time   = sprintf("%02d:%02d", $localutc->hour(), $localutc->minute());
-        $timefg = $$w{offby0fg} || $$w{fg} || [255,255,255];
+        $timefg = $$w{offby0fg} || $$w{fg} || $option{fg} || "white";
       }
       push @row, +{ label   => $label,
                     labelfg => $labelfg,
@@ -1243,8 +1157,8 @@ sub doclock {
     dotext(+{ id          => $$w{id} . "_" . $$p[0],
               x           => $pos,
               y           => $$w{y} + 1,
-              fg          => $$w{$$p[2]} || $$w{fg},
-              bg          => $$w{$$p[3]} || $$w{bg},
+              fg          => $$w{$$p[2]} || $$w{fg} || $option{clockfg} || $option{fg} || "green",
+              bg          => $$w{$$p[3]} || $$w{bg} || $option{bg} || "black",
               text        => $$p[1],
               transparent => $$w{transparent},
             }, $s);
@@ -1255,8 +1169,8 @@ sub doclock {
               x           => $$w{x} + 1 + (($clen > length($dt->day_name()))
                                            ? (int(($clen - length($dt->day_name())) / 2)) : 0),
               y           => $$w{y} + 2,
-              fg          => $$w{dowfg}  || $$w{datefg} || $$w{fg},
-              bg          => $$w{dowbg}  || $$w{datebg} || $$w{bg},
+              fg          => $$w{dowfg}  || $$w{datefg} || $$w{fg} || $option{clockfg} || $option{fg} || "green",
+              bg          => $$w{dowbg}  || $$w{datebg} || $$w{bg} || $option{bg} || "black",
               text        => $dt->day_name(),
               transparent => $$w{transparent},
             }, $s);
@@ -1266,8 +1180,8 @@ sub doclock {
               x           => $$w{x} + 1 + (($clen > length($date))
                                            ? (int(($clen - length($date)) / 2)) : 0),
               y           => $$w{y} + 2 + ($$w{showdow} ? 1 : 0),
-              fg          => $$w{datefg} || $$w{fg},
-              bg          => $$w{datebg} || $$w{bg},
+              fg          => $$w{datefg} || $$w{fg} || $option{clockfg} || $option{fg} || "green",
+              bg          => $$w{datebg} || $$w{bg} || $option{bg} || "black",
               text        => $date,
               transparent => $$w{transparent},
             }, $s);

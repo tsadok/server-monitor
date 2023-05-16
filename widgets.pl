@@ -2,10 +2,15 @@
 # -*- cperl -*-
 
 use Term::Size;
+use Carp;
 
 our %option;
 our @namedcolor = named_colors();
-our %namedcolor = map { $$_{name} => $_ } @namedcolor;
+our %namedcolor = map { $$_{name} => $_,
+                        regularize($$_{name}) => $_
+                      } @namedcolor;
+our $wfocus;
+our $reset = chr(27) . qq{[0m};
 # TODO: consider whether we need access to %state
 # TODO: standardize color handling between monitor.pl, eggs.pl, and tsvdb.pl
 
@@ -19,9 +24,10 @@ our %standard_widget_handler =
    messagelog => sub { domessagelog(@_) },
    ordkey     => sub { doordkey(@_) },
    table      => sub { dotablewidget(@_) },
+   diffuse    => sub { dodiffuse(@_); },
   );
 
-my ($xmax, $ymax) = Term::Size::chars *STDOUT{IO};
+our ($xmax, $ymax) = Term::Size::chars *STDOUT{IO};
 
 sub setfocus {
   my ($widget) = @_;
@@ -63,7 +69,7 @@ sub dostandardwidget {
   my ($w, $s, @more) = @_;
   my $handler = $standard_widget_handler{$$w{type}};
   if (ref $handler) {
-    $handler->($w, $s, @more)
+    $handler->($w, $s, @more);
   } else {
     widgetlog("dostandardwidget(): fallthrough, type=$$w{type}, id=$$w{id}");
     dotext($w, $s, @more);
@@ -92,7 +98,7 @@ sub dotable {
   logit(" record count: " . @record);
   if ($$w{showheader}) {
     my $r = +{ map { $_        => $_,
-                       $_ . "fg" => $$w{headerfg} || $$w{fg} || [255,255,255],
+                       $_ . "fg" => $$w{headerfg} || $$w{fg} || $arg{fg} || $option{fg} || "yellow",
                      } @field };
     unshift @record, $r;
   }
@@ -145,11 +151,23 @@ sub dotable {
           if (length($text) + $x > ($$w{contentsizex} - $$w{x})) {
             $text = substr($text, 0, $$w{x} + $$w{contentsizex} + 1 - $x);
           }
+          my $fg = $$r{$f . "fg"} || $$w{$f . "fg"} || $$w{fg} || $arg{fg} || $option{fg} || "grey";
+          # Debugging only; comment out for backward compatibility with old monitor.cfg files
+          ## croak "dotable: color depth $depth not supported.  " . Dumper(+{ w  => $w,
+          ##                                                                  r  => $r,
+          ##                                                                  f  => $f,
+          ##                                                                  fg => $fg,
+          ##                                                                  id => $id,
+          ##                                                                  x  => $x,
+          ##                                                                  y  => $y,
+          ##                                                                  t  => $text,
+          ##                                                                })
+          ##   if ((ref $fg) and not (("HASH" eq ref $fg) and $$fg{$depth}));
           dotext(+{ id          => $id,
                     text        => $text,
                     x           => $x,
                     y           => $y,
-                    fg          => $$r{$f . "fg"} || $$w{$f . "fg"} || $$w{fg},
+                    fg          => $fg,
                     bg          => $$w{bg},
                     transparent => $$w{transparent},
                   }, $s);
@@ -188,8 +206,8 @@ sub bigtext_glyph {
               text  => $line,
               x     => $x,
               y     => $y,
-              fg    => $$w{fg},
-              bg    => $$w{bg},
+              fg    => $$w{fg} || $option{fg} || "wheat",
+              bg    => $$w{bg} || $option{bg} || "slate",
               transparent => $$w{transparent},
             },
            $s, @more);
@@ -256,7 +274,7 @@ sub dologtail {
               y           => $$w{y} + $n,
               transparent => $$w{transparent},
               bg          => $$w{bg},
-              fg          => $$w{fg},
+              fg          => $$w{fg} || $option{fg} || "white",
             }, $s, %more);
   }
 }
@@ -340,7 +358,7 @@ sub domessagelog {
     $y++;
     for my $x (1 .. $width) {
       $$s[$$w{x} + $x][$$w{y} + $y] = +{ bg   => widgetbg($w, "bg", $$s[$$w{x} + $x][$$w{y} + $y]),
-                                         fg   => clr($$l[$x - 1][1]),
+                                         fg   => clr($$l[$x - 1][1] || $more{fg} || $$w{fg} || $option{fg} || "grey"),
                                          char => $$l[$x - 1][0],
                                        },
     }
@@ -404,7 +422,7 @@ sub donotepad {
               x           => $$w{x} + 1,
               y           => $$w{y} + $n,
               bg          => $$w{bg},
-              fg          => $$w{fg},
+              fg          => $$w{fg} || $more{fg} || $option{fg} || "grey",
               transparent => $$w{transparent},
             }, $s);
   }
@@ -417,7 +435,7 @@ sub doordkey {
 }
 
 sub doclock {
-  my ($w, $s) = @_;
+  my ($w, $s, %arg) = @_;
   my %tzalias = ( localtime => $option{localtimezone} );
   my $dt = $$w{faketime}
     || DateTime->now(
@@ -459,12 +477,22 @@ sub doclock {
   if ($$w{contentsizex} and $$w{contentsizey}) {
     # Blank at the _previous_ size (in case it is shrinking):
     blankrect($s, $$w{x}, $$w{y}, $$w{x} + $$w{contentsizex} + 1, $$w{y} + $$w{contentsizey} + 1,
-              widgetbg($w), " "); #"░", widgetfg($w));
+              sub { my ($x,$y) = @_;
+                    ($$w{transparent}
+                     ? "__TRANSPARENT__"
+                     : widgetbg($w, "bg", $$s[$x][$y]{bg},
+                                # TODO
+                               )) },
+              " ", #"░",
+              widgetfg($w, "clockfg"));
   }
   $$w{contentsizey} = 1 + ($$w{showdate} ? 1 : 0) + ($$w{showdow} ? 1 : 0);
   $$w{contentsizex} = $clen;
   blankrect($s, $$w{x}, $$w{y}, $$w{x} + $$w{contentsizex} + 1, $$w{y} + $$w{contentsizey} + 1,
-            widgetbg($w), " ");
+            sub { my ($x,$y) = @_;
+                  return widgetbg($w, undef, $$s[$x][$y])
+                }, " ", # TODO
+           );
   doborder($w,$s);
   my $pos = $$w{x} + 1 + (($clen > length($time))
                           ? (int(($clen - length($time)) / 2)) : 0);
@@ -472,8 +500,8 @@ sub doclock {
     dotext(+{ id          => $$w{id} . "_" . $$p[0],
               x           => $pos,
               y           => $$w{y} + 1,
-              fg          => $$w{$$p[2]} || $$w{fg},
-              bg          => $$w{$$p[3]} || $$w{bg},
+              fg          => $$w{$$p[2]} || $$w{fg} || $arg{fg} || $option{fg} || "green",
+              bg          => $$w{$$p[3]} || $$w{bg} || $arg{bg} || $option{bg} || "black",
               text        => $$p[1],
               transparent => $$w{transparent},
             }, $s);
@@ -484,8 +512,8 @@ sub doclock {
               x           => $$w{x} + 1 + (($clen > length($dt->day_name()))
                                            ? (int(($clen - length($dt->day_name())) / 2)) : 0),
               y           => $$w{y} + 2,
-              fg          => $$w{dowfg}  || $$w{datefg} || $$w{fg},
-              bg          => $$w{dowbg}  || $$w{datebg} || $$w{bg},
+              fg          => $$w{dowfg}  || $$w{datefg} || $$w{fg} || $arg{fg} || $option{fg} || "green",
+              bg          => $$w{dowbg}  || $$w{datebg} || $$w{bg} || $arg{bg} || $option{bg} || "black",
               text        => $dt->day_name(),
               transparent => $$w{transparent},
             }, $s);
@@ -495,8 +523,8 @@ sub doclock {
               x           => $$w{x} + 1 + (($clen > length($date))
                                            ? (int(($clen - length($date)) / 2)) : 0),
               y           => $$w{y} + 2 + ($$w{showdow} ? 1 : 0),
-              fg          => $$w{datefg} || $$w{fg},
-              bg          => $$w{datebg} || $$w{bg},
+              fg          => $$w{datefg} || $$w{fg} || $arg{fg} || $option{fg} || "green",
+              bg          => $$w{datebg} || $$w{bg} || $arg{bg} || $option{bg} || "black",
               text        => $date,
               transparent => $$w{transparent},
             }, $s);
@@ -505,10 +533,26 @@ sub doclock {
 
 sub blankrect {
   my ($s, $minx, $miny, $maxx, $maxy, $bg, $c, $fg) = @_;
+  croak "blankrect(): called with invalid bg, " . Dumper(+{ minx => $minx, miny => $miny, maxx => $maxx, maxy => $maxy })
+    if not $bg;
   for my $x ($minx .. $maxx) {
     for my $y ($miny .. $maxy) {
-      $$s[$x][$y] = +{ bg   => ($bg eq '__TRANSPARENT__') ? $$s[$x][$y]{bg} : $bg,
-                       fg   => ($fg || ""),
+      if ("CODE" eq ref $bg) {
+        $bg = $bg->($x,$y);
+        croak "blankrect(): coderef returned invalid bg"
+          if not $bg;
+      }
+      if ("CODE" eq ref $fg) {
+        $fg = $fg->($x,$y);
+      }
+      if ($bg eq "__TRANSPARENT__") {
+        $bg = $$s[$x][$y]{bg};
+        croak "blankrect(): transparent blanking with nothing behind.  "
+          . Dumper(+{ x => $x, y => $y, cell => $$s[$x][$y] })
+          if not $bg;
+      }
+      $$s[$x][$y] = +{ bg   => $bg,
+                       fg   => $fg || $option{fg} || "magenta",
                        char => ((defined $c) ? $c : " "),
                      };
     }}}
@@ -516,6 +560,8 @@ sub blankrect {
 sub doborder {
   my ($w, $s) = @_;
   my $fg = widgetfg($w, "borderfg");
+  #croak("Undefined bg " . Dumper(+{ x => $$w{x}, y => $$w{y}, cell => $$s[$$w{x}][$$w{y}]})
+  #      . Dumper(+{ screen => $s })) if not defined $$s[$$w{x}][$$w{y}]{bg};
   $$s[$$w{x}][$$w{y}] = +{ char => "╔", fg => $fg, bg => widgetbg($w, "borderbg", $$s[$$w{x}][$$w{y}]) };
   $$s[$$w{x} + $$w{contentsizex} + 1][$$w{y}] = +{ char => "╗", fg => $fg, bg => widgetbg($w, "borderbg", $$s[$$w{x} + $$w{contentsizex} + 1][$$w{y}]) };
   $$s[$$w{x}][$$w{y} + $$w{contentsizey} + 1] = +{ char => "╚", fg => $fg, bg => widgetbg($w, "borderbg", $$s[$$w{x}][$$w{y} + $$w{contentsizey} + 1]) };
@@ -534,8 +580,10 @@ sub doborder {
               x           => $$w{x} + 1 + (($$w{contentsizex} > length($$w{title}))
                                            ? (int(($$w{contentsizex} - length($$w{title})) / 2)) : 0),
               y           => $$w{y},
-              fg          => ($$w{id} eq $$wfocus{id}) ? "white" : $$w{titlefg} || $$w{borderfg} || $$w{fg},
-              bg          => $$w{titlebg} || $$w{borderbg} || $$w{bg},
+              fg          => (($$w{id} eq $$wfocus{id})
+                              ? ( $option{focusfg} || $option{fg} || "white")
+                              : $$w{titlefg} || $$w{borderfg} || $$w{fg} || $option{fg} || "white"),
+              bg          => $$w{titlebg} || $$w{borderbg} || $$w{bg} || $option{bg} || "black",
               text        => $$w{title},
               transparent => $$w{transparent},
             }, $s);
@@ -554,40 +602,169 @@ sub dotext {
     $$t{cols} = length $text;
     my $x = ($$t{x} >= 0) ? $$t{x} : ($xmax + $$t{x} - $$t{cols});
     for my $c (split //, $text) {
-      $c = " " if $c =~ /\s/;
-      $$s[$x][$$t{y}] = +{ bg   => widgetbg($t, "bg", $$s[$x][$$t{y}]),
-                           fg   => widgetfg($t),
-                           char => $c };
-      $x++;
+      if ($x < $xmax) {
+        $c = " " if $c =~ /\s/;
+        $$s[$x][$$t{y}] = +{ bg   => widgetbg($t, "bg", $$s[$x][$$t{y}]),
+                             fg   => widgetfg($t),
+                             char => $c };
+        $x++;
+      }}
+  }
+}
+
+sub dodiffuse {
+  my ($w, $s, %more) = @_;
+  logit(qq[dodiffuse($$w{id})]);
+  if (not $more{redrawonly}) {
+    $$w{x}            ||= 0;
+    $$w{y}            ||= 0;
+    $$w{xmax}         ||= $xmax;
+    $$w{ymax}         ||= $ymax;
+    $$w{contentsizex} ||= 1 + $$w{xmax} - $$w{x};
+    $$w{contentsizey} ||= 1 + $$w{ymax} - $$w{y};
+    $$w{title}        ||= "Diffuse";
+    $$w{fade}         ||= (0.05 + rand(0.5));
+    $$w{paintprob}    ||= 5 + int rand 5;
+    $$w{fudge}        ||= 65535 + int rand 65535;
+    $$w{offset}         = (defined $$w{offset}) ? $$w{offset} : 2; # Allow edges to behave as middle
+    $$w{c} ||= 0;
+    logit(qq[dodiffuse: ($$w{x},$$w{y})/($$w{xmax},$$w{ymax}); offset=$$w{offset}; fade=$$w{fade}; prob=$$w{paintprob}; fudge=$$w{fudge}; c=$$w{c}]);
+    $$w{map} ||= +[ map {
+      [ map {
+        +{ r => 0, g => 0, b => 0 };
+      } 0 .. ($$w{ymax} + 2 * $$w{offset}) ]
+    } 0 .. ($$w{xmax} + 2 * $$w{offset}) ];
+    if ($$w{preseed} and not $$w{__DID_PRESEED__}) {
+      $$w{__DID_PRESEED__}++;
+      for (1 .. $$w{preseed}) {
+        diffuse_addpaint($w);
+      }
     }
+  }
+  diffuse_draw($w, $s);
+  if (not $more{redrawonly}) {
+    diffuse_diffuse($w);
+    diffuse_addpaint($w) if ($$w{paintprob} > rand 100);
+  }
+}
+
+sub diffuse_draw {
+  my ($w, $s) = @_;
+  logit(qq[diffuse_draw($$w{id})]);
+  for my $y (0 .. $$w{ymax}) {
+    for my $x (0 .. $$w{xmax}) {
+      my $mx = $x + $$w{offset};
+      my $my = $y + $$w{offset};
+      $$s[$$w{x} + $x][$$w{y} + $y] = $eightbit
+        # TODO: This hits perf kinda hard and also doesn't work; clearly it is wrong.  Plsfix.
+        ? $namedcolor[int(diffuse_scale($$w{map}[$mx][$my]{r}) * (scalar @namedcolor) / 255)]{name}
+        : +{ bg => [diffuse_scale($$w{map}[$mx][$my]{r}),
+                    diffuse_scale($$w{map}[$mx][$my]{g}),
+                    diffuse_scale($$w{map}[$mx][$my]{b})],
+             fg   => "black", # irrelevant
+             char => "░", };
+    }}
+}
+
+sub diffuse_diffuse {
+  my ($w) = @_;
+  logit(qq[diffuse_diffuse($$w{id})]);
+  my @old = map {
+    [ map { my $x = $_;
+            +{ r => $$x{r}, g => $$x{g}, b => $$x{b}, };
+          } @$_ ]
+  } @{$$w{map}};
+  for my $x (2 .. ($$w{xmax} + (2 * $$w{offset}) - 2)) {
+    for my $y (1 .. ($$w{ymax} + (2 * $$w{offset}) - 1)) {
+      for my $color (qw(r g b)) {
+        $$w{map}[$x][$y]{$color} = abs(((1 * $old[$x - 2][$y - 1]{$color}) +
+                                        (2 * $old[$x - 2][$y]{$color})     +
+                                        (1 * $old[$x - 2][$y + 1]{$color}) +
+                                        (2 * $old[$x - 1][$y - 1]{$color}) +
+                                        (3 * $old[$x - 1][$y]{$color})     +
+                                        (2 * $old[$x - 1][$y + 1]{$color}) +
+                                        (3 * $old[$x][$y - 1]{$color})     +
+                                        (5 * $old[$x][$y]{$color})         +
+                                        (3 * $old[$x][$y + 1]{$color})     +
+                                        (2 * $old[$x + 1][$y - 1]{$color}) +
+                                        (3 * $old[$x + 1][$y]{$color})     +
+                                        (2 * $old[$x + 1][$y + 1]{$color}) +
+                                        (1 * $old[$x + 2][$y - 1]{$color}) +
+                                        (2 * $old[$x + 2][$y]{$color})     +
+                                        (1 * $old[$x + 2][$y + 1]{$color}))
+                                       / (33 + $$w{fade}));
+        # Fix floating-point underflow:
+        $$w{map}[$x][$y]{$color} = int($$w{map}[$x][$y]{$color} * $$w{fudge}) / $$w{fudge};
+      }}}
+}
+
+sub diffuse_addpaint {
+  my ($w) = @_;
+  my $c = +{ map { ( $_ => rand 5000 ) } qw(r g b) };
+  my $x = $$w{offset} + 1 + int rand($$w{xmax} - 2);
+  my $y = $$w{offset} + 1 + int rand($$w{ymax} - 2);
+  for (1 .. 1 + int rand 3) {
+    logit(qq[diffuse_addpaint($$w{id}): c=<$$c{r},$$c{g},$$c{b}> at ($x,$y)]);
+    for my $z (qw(r g b)) {
+      $$w{map}[$x][$y]{$z} += $$c{$z};
+    }
+    $x += (($x > ($$w{xmax} / 2)) ? -1 : 1) * (1 + int rand ($$w{xsplatter} || $$w{splatter} || 5));
+    $y += (($y > ($$w{ymax} / 2)) ? -1 : 1) * (1 + int rand ($$w{ysplatter} || $$w{splatter} || 3));
+  }
+}
+
+sub diffuse_scale {
+  my ($v) = @_;
+  return 0 if $v <= 0;
+  my $ln = log($v * 1000);
+  my $sqr = $ln * $ln;
+  if ($sqr > 255) {
+    return 255;
+  } else {
+    return int $sqr;
   }
 }
 
 sub widgetfg {
   my ($w, $fgfield) = @_;
-  #return "" if $option{colordepth} < 4;
+  #croak(Dumper(+{ option => \%option })) if not $option{colordepth};
+  return "" if $option{colordepth} < 3;
   $fgfield ||= "fg"; $fgfield = "fg" if not $$w{$fgfield};
   colorlog("widgetfg($$w{id}, '$fgfield'): "
            . ("ARRAY" eq ref $$w{$fgfield}) ? "<" . @{$$w{$fgfield}} . ">" : $$w{$fgfield});
-  return $$w{$fgfield} || "white";
+  # Debugging only.  Comment out for backward-compatibility with old monitor.cfg files:
+  ## my $depth = $option{colordepth} || 8;
+  ## croak "widgetfg: color depth $depth not supported.  " . Dumper(+{ w => $w, fgfield => $fgfield })
+  ##   if ((ref $$w{$fgfield}) and not (("HASH" eq ref $$w{$fgfield}) and $$w{$fgfield}{$depth}));
+  return $$w{$fgfield} || $option{fg} || "white";
 }
 
 sub widgetbg {
   my ($w, $bgfield, $old) = @_;
-  #return "" if $option{colordepth} < 4;
+  croak "widgetbg(): no third argument" if not defined $old;
+  #croak(Dumper(+{ option => \%option })) if not $option{colordepth};
+  return "default" if $option{colordepth} < 3;
   $bgfield ||= ($$w{id} eq $$wfocus{id}) ? "focusbg" : "bg";
   $bgfield = "bg" if not $$w{$bgfield};
-  if ($$w{transparent} and $$w{id} ne $$wfocus{id}) {
+  if ($$w{transparent} and ($$w{id} ne ((ref $wfocus) ? ($$wfocus{id} || "__DO_NOT_MATCH__") : "__NO_MATCH__"))) {
     if ($$old{bg}) {
       colorlog("widgetbg($$w{id}, '$bgfield'): Transparent widget, keeping bg, " . ($$old{bg} || "bg"));
       return $$old{bg};
     } else {
-      colorlog("widgetbg($$w{id}, '$bgfield'): Transparent widget with nothing behind it.");
+      croak "widgetbg($$w{id}, '$bgfield', " . Dumper($old) . "): Transparent widget with nothing behind it.";
+      colorlog("widgetbg($$w{id}, '$bgfield', $old): Transparent widget with nothing behind it.");
+      return "magenta";
     }
   }
   colorlog("widgetbg($$w{id}, '$bgfield'): "
            . ("ARRAY" eq ref $$w{$bgfield}) ? "<" . @{$$w{$bgfield}} . ">" : $$w{$bgfield});
-  return $$w{$bgfield} || "slate";
+  # Debugging only.  For backward compatibility with old monitor.cfg
+  # that specifies colors as rgb-triplets, comment out the next three
+  # lines:
+  ## my $depth = $option{colordepth} || 8;
+  ## croak "widgetbg: color depth $depth not supported.  " . Dumper(+{ w => $w, bgfield => $bgfield })
+  ##   if ((ref $$w{$bgfield}) and not (("HASH" eq ref $$w{$bgfield}) and $$w{$bgfield}{$depth}));
+  return $$w{$bgfield} || $option{bg} || "black";
 }
 
 sub drawscreen {
@@ -602,7 +779,7 @@ sub drawscreen {
     my $lastbg = "";
     my $lastfg = "";
     for my $x (0 .. $arg{xmax}) {
-      my $nbg = $namedcolor{$$s[$x][$y]{bg}} || $namedcolor{bg} || $namedcolor{slate};
+      my $nbg = $namedcolor{$$s[$x][$y]{bg}} || $namedcolor{bg} || $namedcolor{black};
       my $bgcode = (("ARRAY" eq ref $$s[$x][$y]{bg})
                     ? rgb(@{$$s[$x][$y]{bg}}, "bg")
                     : colorcode($nbg, $depth, "bg") || "");
@@ -610,9 +787,11 @@ sub drawscreen {
       my $fgcode = (("ARRAY" eq ref $$s[$x][$y]{fg})
                     ? rgb(@{$$s[$x][$y]{fg}})
                     : colorcode($nfg, $depth) || "");
-      print "" . (($$s[$x][$y]{bg} eq $lastbg) ? "" : $bgcode)
-               . (($$s[$x][$y]{fg} eq $lastfg) ? "" : $fgcode)
-               . (length($$s[$x][$y]{char}) ? $$s[$x][$y]{char} : " ")
+      print ""
+        . ((($$s[$x][$y]{bg} eq $lastbg) and
+            ($$s[$x][$y]{fg} eq $lastfg))
+           ? "" : $reset . $bgcode . $fgcode)
+        . (length($$s[$x][$y]{char}) ? $$s[$x][$y]{char} : " ")
         unless (($x == $arg{xmax}) and
                 ($y == $arg{ymax}) and
                 (not $arg{fullrect}));
@@ -626,16 +805,18 @@ sub drawscreen {
 sub colorcode {
   my ($clrdef, $depth, $fgbg) = @_;
   my $ground = $fgbg ? "bg" : "fg";
-  if ($depth >= 24) {
+  if ($$clrdef{$ground}{$depth} eq "__default__") {
+    return "";
+  } elsif ($depth >= 24) {
     return rgb($$clrdef{$ground}{24}{r},
                $$clrdef{$ground}{24}{g},
                $$clrdef{$ground}{24}{b},
                $fgbg);
   } elsif ($depth >= 8) {
     return eightbitcolorcode($$clrdef{$ground}{8}, $fgbg);
-  } elsif ($depth >= 4) {
+  } elsif ($depth >= 3) {
     use Term::ANSIColor;
-    return color $$clrdef{$ground}{4};
+    return color $$clrdef{$ground}{$depth};
   } else {
     return ""; # I only bother to support 1-bit color because it is ridiculously easy.
   }
@@ -643,8 +824,10 @@ sub colorcode {
 
 sub rgb { # Return terminal code for a 24-bit color.
   my ($red, $green, $blue, $isbg) = @_;
-  #push @message, ["rgb() called at inappropriate color depth.", "bug"]
-  #  if $opt{colordepth} < 24;
+  #colorlog("BUG: rgb($red,$green,$blue,$isbg) called at inappropriate color depth ($option{colordepth} < 24).")
+  #  if $option{colordepth} < 24;
+  #croak "BUG: rgb($red,$green,$blue,$isbg) called at inappropriate color depth ($option{colordepth} < 24)."
+  #  if $option{colordepth} < 24;
   my $fgbg = ($isbg) ? 48 : 38;
   my $delimiter = ";";
   return "\x1b[$fgbg$ {delimiter}2$ {delimiter}$ {red}"
@@ -665,8 +848,16 @@ sub eightbitcolorcode {
   return chr(27) . qq([$fgbg;5;${cnum}m);
 }
 
+sub regularize {
+  my ($name) = @_;
+  my $reg = lc $name;
+  $reg =~ s/^[a-z0-9-]+/_/g;
+  $reg;
+}
+
 sub named_colors {
   # Alphabetical list of keys:
+  # a - default (terminal default)
   # c - cyan
   # d - gold
   # e - purple-red
@@ -689,363 +880,358 @@ sub named_colors {
   # x - spring green
   # y - yellow
   # z - azure
-  return (# In 4-bit (ANSI) mode, all background colors must be in the
-          #             0-7 range, and all foreground colors in 8-15.
-          # In 8-bit mode, the rules are not as clearly defined yet.
-          #             I should probably do something about that (TODO).
-          # In 24-bit mode, no foreground may be darker than 144,144,144
-          #             and no background may be lighter than 112,112,112
-          #             thus guaranteeing a minimum contrast of 32,32,32,
-          #             which happens if someone specifies black on white.
-          +{ name => "white",
-             key  => "w",
-             bg   => +{ 4  => "on_white",
-                        8  => 240,
-                        24 => +{ r => 112,
-                                 g => 112,
-                                 b => 112, },
-                      },
-             fg   => +{ 4  => "bold white",
-                        8  => 255,
-                        24 => +{ r => 255,
-                                 g => 255,
-                                 b => 255, },
-                      }},
-          +{ name   => "grey",
-             key    => "s", # "silver"
-             bg     => +{ 4  => "on_white",
-                          8  => 240,
-                          24 => +{ r => 64,
-                                   g => 64,
-                                   b => 64, },
-                        },
-             fg     => +{ 4  => "bold white",
-                          8  => 251,
-                          24 => +{ r => 200,
-                                   g => 200,
-                                   b => 200, },
-                        },
-           },
-          +{ name   => "black",
-             key    => "k",
-             bg     => +{ 4  => "on_black",
-                          8  => 232,
-                          24 => +{ r => 0,
-                                   g => 0,
-                                   b => 0, },
-                        },
-             fg     => +{ 4  => "bold black",
-                          8  => 243,
-                          24 => +{ r => 144,
-                                   g => 144,
-                                   b => 144, },
-                        },
-           },
-          +{ name => "red",
-             key    => "r",
-             bg     => +{ 4  => "on_red",
-                          8  => 88,
-                          24 => +{ r => 112,
-                                   g => 0,
-                                   b => 0, },
-                        },
-             fg     => +{ 4  => "bold red",
-                          8  => 160,
-                          24 => +{ r => 255,
-                                   g => 144,
-                                   b => 144, },
-                        },
-           },
-          +{ name   => "red-orange",
-             key    => "q",
-             bg     => +{ 4  => "on_red",
-                          8  => 88,
-                          24 => +{ r => 112,
-                                   g => 48,
-                                   b => 0, },
-                        },
-             fg     => +{ 4  => "bold red",
-                          8  => 202,
-                          24 => +{ r => 255,
-                                   g => 208,
-                                   b => 144, },
-                        },
-           },
-          +{ name   => "orange",
-             key    => "o",
-             bg     => +{ 4  => "on_red",
-                          8  => 130,
-                          24 => +{ r => 112,
-                                   g => 64,
-                                   b => 0, },
-                        },
-             fg     => +{ 4  => "bold red",
-                          8  => 208,
-                          24 => +{ r => 255,
-                                   g => 192,
-                                   b => 144, },
-                        },
-           },
-          +{ name   => "gold",
-             key    => "d",
-             bg     => +{ 4  => "on_yellow",
-                          8  => 94,
-                          24 => +{ r => 112,
-                                   g => 88,
-                                   b => 0, },
-                        },
-             fg     => +{ 4  => "bold yellow",
-                          8  => 214,
-                          24 => +{ r => 255,
-                                   g => 212,
-                                   b => 144, },
-                        },
-           },
-          +{ name   => "yellow",
-             key    => "y",
-             bg     => +{ 4  => "on_yellow",
-                          8  => 94,
-                          24 => +{ r => 112,
-                                   g => 112,
-                                   b => 0, },
-                        },
-             fg     => +{ 4  => "bold yellow",
-                          8  => 11,
-                          24 => +{ r => 255,
-                                   g => 255,
-                                   b => 144, },
-                        }},
-          +{ name   => "spring green",
-             key    => "x",
-             bg     => +{ 4  => "on_yellow",
-                          8  => 58, # or 100,
-                          24 => +{ r => 88,
-                                   g => 96,
-                                   b => 0, },
-                        },
-             fg     => +{ 4  => "bold yellow",
-                          8  => 190,
-                          24 => +{ r => 214,
-                                   g => 255,
-                                   b => 144, },
-                        }},
-          +{ name   => "green",
-             key    => "g",
-             bg     => +{ 4  => "on_green",
-                          8  => 22, # or 28?
-                          24 => +{ r => 0,
-                                   g => 112,
-                                   b => 0, },
-                        },
-             fg     => +{ 4  => "bold green",
-                          8  => 190,
-                          24 => +{ r => 144,
-                                   g => 255,
-                                   b => 144, },
-                        }},
-          +{ name   => "teal",
-             key    => "t",
-             bg     => +{ 4  => "on_cyan",
-                          8  => 23,
-                          24 => +{ r => 0,
-                                   g => 112,
-                                   b => 96, },
-                        },
-             fg     => +{ 4  => "bold cyan",
-                          8  => 158,
-                          24 => +{ r => 144,
-                                   g => 255,
-                                   b => 196, },
-                        }
-             #r      => 50,
-             #g      => 240,
-             #b      => 153,
-           },
-          +{ name   => "cyan",
-             key    => "c",
-             bg     => +{ 4  => "on_cyan",
-                          8  => 23,
-                          24 => +{ r => 0,
-                                   g => 112,
-                                   b => 112, },
-                        },
-             fg     => +{ 4  => "bold cyan",
-                          8  => 51,
-                          24 => +{ r => 144,
-                                   g => 255,
-                                   b => 255, },
-                        }
-           },
-          +{ name   => "azure",
-             key    => "z",
-             bg     => +{ 4  => "on_blue",
-                          8  => 25,
-                          24 => +{ r => 0,
-                                   g => 85,
-                                   b => 112, },
-                        },
-             fg     => +{ 4  => "bold cyan",
-                          8  => 45,
-                          24 => +{ r => 144,
-                                   g => 192,
-                                   b => 255, },
-                        }},
-          +{ name   => "blue",
-             key    => "l",
-             bg     => +{ 4  => "on_blue",
-                          8  => 18,
-                          24 => +{ r => 0,
-                                   g => 0,
-                                   b => 112, },
-                        },
-             fg     => +{ 4  => "bold blue",
-                          8  => 21,
-                          24 => +{ r => 144,
-                                   g => 144,
-                                   b => 255, },
-                        }},
-          +{ name   => "indigo",
-             key    => "i",
-             bg     => +{ 4  => "on_blue",
-                          8  => 17, # or 54
-                          24 => +{ r => 64,
-                                   g => 0,
-                                   b => 112, },
-                        },
-             fg     => +{ 4  => "bold blue",
-                          8  => 147,
-                          24 => +{ r => 176,
-                                   g => 144,
-                                   b => 255, },
-                        }
-             #r      => 143,
-             #g      => 96,
-             #b      => 255,
-           },
-          +{ name   => "purple",
-             key    => "u",
-             bg     => +{ 4  => "on_magenta",
-                          8  => 53,
-                          24 => +{ r => 88,
-                                   g => 0,
-                                   b => 112, },
-                        },
-             fg     => +{ 4  => "bold magenta",
-                          8  => 177,
-                          24 => +{ r => 216,
-                                   g => 144,
-                                   b => 255, },
-                        }
-             #r      => 181,
-             #g      => 0,
-             #b      => 236,
-           },
-          +{ name   => "magenta",
-             key    => "m",
-             bg     => +{ 4  => "on_magenta",
-                          8  => 53,
-                          24 => +{ r => 112,
-                                   g => 0,
-                                   b => 112, },
-                        },
-             fg     => +{ 4  => "bold magenta",
-                          8  => 201,
-                          24 => +{ r => 255,
-                                   g => 144,
-                                   b => 255, },
-                        }},
-          +{ name   => "hot pink",
-             key    => "h",
-             bg     => +{ 4  => "on_magenta",
-                          8  => 89,
-                          24 => +{ r => 112,
-                                   g => 0,
-                                   b => 96, },
-                        },
-             fg     => +{ 4  => "bold magenta",
-                          8  => 199,
-                          24 => +{ r => 255,
-                                   g => 144,
-                                   b => 236, },
-                        }
-#             r      => 255,
-#             g      => 0,
-#             b      => 236,
-           },
-          +{ name   => "pink",
-             key    => "p",
-             bg     => +{ 4  => "on_magenta",
-                          8  => 138,
-                          24 => +{ r => 112,
-                                   g => 72,
-                                   b => 88, },
-                        },
-             fg     => +{ 4  => "bold magenta",
-                          8  => 218,
-                          24 => +{ r => 255,
-                                   g => 160,
-                                   b => 235, },
-                        }},
-          +{ name   => "purple-red",
-             key    => "e",
-             bg     => +{ 4  => "on_magenta",
-                          8  => 52,
-                          24 => +{ r => 112,
-                                   g => 32,
-                                   b => 80, },
-                        },
-             fg     => +{ 4  => "bold magenta",
-                          8  => 162,
-                          24 => +{ r => 245,
-                                   g => 144,
-                                   b => 180, },
-                        }
-             #r      => 240,
-             #g      => 102,
-             #b      => 170,
-           },
-          +{ name   => "brown",
-             key    => "n",
-             bg     => +{ 4  => "on_magenta",
-                          8  => 95,
-                          24 => +{ r => 88,
-                                   g => 48,
-                                   b => 16, },
-                        },
-             fg     => +{ 4  => "bold magenta",
-                          8  => 178,
-                          24 => +{ r => 235,
-                                   g => 172,
-                                   b => 144, },
-                        }
-             #r      => 219,
-             #g      => 161,
-             #b      => 57,
-           },
-          +{ name => "slate",
-             bg   => +{ 4  => "on_cyan",
-                        8  => 59,
-                        24 => +{ r => 27,
-                                 g => 51,
-                                 b => 49,
-                               }},
-             fg   => +{ 4  => "bold cyan",
-                        8  => 151,
-                        24 => +{ r => 146,
-                                 g => 173,
-                                 b => 171, }},
-           },
-          +{ name => "wheat",
-             bg   => +{ 4  => "on_white",
-                        8  => 179,
-                        24 => +{ r => 112,
-                                 g => 93,
-                                 b => 56,
-                               }},
-             fg   => +{ 4  => "bold yellow",
-                        8  => 221, # or 229 or 230
-                        24 => +{ r => 255,
-                                 g => 230,
-                                 b => 188, }}},
-         );
+  return map {
+    my $c = $_;
+    $$c{bg}{3} ||= $$c{bg}{4};
+    $$c{fg}{3} ||= $$c{fg}{4};
+    $$c{fg}{3} =~ s/bold\s+//;
+    $c;
+  } (# In 4-bit (ANSI) mode, all background colors must be in the
+     #             0-7 range, and all foreground colors in 8-15.
+     # In 8-bit mode, the rules are not as clearly defined yet.
+     #             I should probably do something about that (TODO).
+     # In 24-bit mode, no foreground may be darker than 144,144,144
+     #             and no background may be lighter than 112,112,112
+     #             thus guaranteeing a minimum contrast of 32,32,32,
+     #             which happens if someone specifies black on white.
+     +{ name => "default",
+        key  => "a",
+        bg   => +{ 4  => "__default__",
+                   8  => "__default__",
+                   24 => "__default__",
+                 },
+        fg   => +{ 4  => "__default__",
+                   8  => "__default__",
+                   24 => "__default__",
+                 },
+      },
+     +{ name => "white",
+        key  => "w",
+        bg   => +{ 4  => "on_white",
+                   8  => 240,
+                   24 => +{ r => 112,
+                            g => 112,
+                            b => 112, },
+                 },
+        fg   => +{ 4  => "bold white",
+                   8  => 255,
+                   24 => +{ r => 255,
+                            g => 255,
+                            b => 255, },
+                 }},
+     +{ name   => "grey",
+        key    => "s", # "silver"
+        bg     => +{ 4  => "on_white",
+                     8  => 240,
+                     24 => +{ r => 64,
+                              g => 64,
+                              b => 64, },
+                   },
+        fg     => +{ 4  => "bold white",
+                     8  => 251,
+                     24 => +{ r => 200,
+                              g => 200,
+                              b => 200, },
+                   },
+      },
+     +{ name   => "black",
+        key    => "k",
+        bg     => +{ 4  => "on_black",
+                     8  => 232,
+                     24 => +{ r => 0,
+                              g => 0,
+                              b => 0, },
+                   },
+        fg     => +{ 4  => "bold black",
+                     8  => 243,
+                     24 => +{ r => 144,
+                              g => 144,
+                              b => 144, },
+                   },
+      },
+     +{ name => "red",
+        key    => "r",
+        bg     => +{ 4  => "on_red",
+                     8  => 88,
+                     24 => +{ r => 112,
+                              g => 0,
+                              b => 0, },
+                   },
+        fg     => +{ 4  => "bold red",
+                     8  => 160,
+                     24 => +{ r => 255,
+                              g => 144,
+                              b => 144, },
+                   },
+      },
+     +{ name   => "red-orange",
+        key    => "q",
+        bg     => +{ 4  => "on_red",
+                     8  => 88,
+                     24 => +{ r => 112,
+                              g => 48,
+                              b => 0, },
+                   },
+        fg     => +{ 4  => "bold red",
+                     8  => 202,
+                     24 => +{ r => 255,
+                              g => 208,
+                              b => 144, },
+                   },
+      },
+     +{ name   => "orange",
+        key    => "o",
+        bg     => +{ 4  => "on_red",
+                     8  => 130,
+                     24 => +{ r => 112,
+                              g => 64,
+                              b => 0, },
+                   },
+        fg     => +{ 4  => "bold red",
+                     8  => 208,
+                     24 => +{ r => 255,
+                              g => 192,
+                              b => 144, },
+                   },
+      },
+     +{ name   => "gold",
+        key    => "d",
+        bg     => +{ 4  => "on_yellow",
+                     8  => 94,
+                     24 => +{ r => 112,
+                              g => 88,
+                              b => 0, },
+                   },
+        fg     => +{ 4  => "bold yellow",
+                     8  => 214,
+                     24 => +{ r => 255,
+                              g => 212,
+                              b => 144, },
+                   },
+      },
+     +{ name   => "yellow",
+        key    => "y",
+        bg     => +{ 4  => "on_yellow",
+                     8  => 94,
+                     24 => +{ r => 112,
+                              g => 112,
+                              b => 0, },
+                   },
+        fg     => +{ 4  => "bold yellow",
+                     8  => 11,
+                     24 => +{ r => 255,
+                              g => 255,
+                              b => 144, },
+                   }},
+     +{ name   => "spring-green",
+        key    => "x",
+        bg     => +{ 4  => "on_yellow",
+                     8  => 58, # or 100,
+                     24 => +{ r => 88,
+                              g => 96,
+                              b => 0, },
+                   },
+        fg     => +{ 4  => "bold yellow",
+                     8  => 190,
+                     24 => +{ r => 214,
+                              g => 255,
+                              b => 144, },
+                   }},
+     +{ name   => "green",
+        key    => "g",
+        bg     => +{ 4  => "on_green",
+                     8  => 22, # or 28?
+                     24 => +{ r => 0,
+                              g => 112,
+                              b => 0, },
+                   },
+        fg     => +{ 4  => "bold green",
+                     8  => 190,
+                     24 => +{ r => 144,
+                              g => 255,
+                              b => 144, },
+                   }},
+     +{ name   => "teal",
+        key    => "t",
+        bg     => +{ 4  => "on_cyan",
+                     8  => 23,
+                     24 => +{ r => 0,
+                              g => 112,
+                              b => 96, },
+                   },
+        fg     => +{ 4  => "bold cyan",
+                     8  => 158,
+                     24 => +{ r => 144,
+                              g => 255,
+                              b => 196, },
+                   }},
+     +{ name   => "cyan",
+        key    => "c",
+        bg     => +{ 4  => "on_cyan",
+                     8  => 23,
+                     24 => +{ r => 0,
+                              g => 112,
+                              b => 112, },
+                   },
+        fg     => +{ 4  => "bold cyan",
+                     8  => 51,
+                     24 => +{ r => 144,
+                              g => 255,
+                              b => 255, },
+                   }},
+     +{ name   => "azure",
+        key    => "z",
+        bg     => +{ 4  => "on_blue",
+                     8  => 25,
+                     24 => +{ r => 0,
+                              g => 85,
+                              b => 112, },
+                   },
+        fg     => +{ 4  => "bold cyan",
+                     8  => 45,
+                     24 => +{ r => 144,
+                              g => 192,
+                              b => 255, },
+                   }},
+     +{ name   => "blue",
+        key    => "l",
+        bg     => +{ 4  => "on_blue",
+                     8  => 18,
+                     24 => +{ r => 0,
+                              g => 0,
+                              b => 112, },
+                   },
+        fg     => +{ 4  => "bold blue",
+                     8  => 21,
+                     24 => +{ r => 144,
+                              g => 144,
+                              b => 255, },
+                   }},
+     +{ name   => "indigo",
+        key    => "i",
+        bg     => +{ 4  => "on_blue",
+                     8  => 17, # or 54
+                     24 => +{ r => 64,
+                              g => 0,
+                              b => 112, },
+                   },
+        fg     => +{ 4  => "bold blue",
+                     8  => 147,
+                     24 => +{ r => 176,
+                              g => 144,
+                              b => 255, },
+                   }},
+     +{ name   => "purple",
+        key    => "u",
+        bg     => +{ 4  => "on_magenta",
+                     8  => 53,
+                     24 => +{ r => 88,
+                              g => 0,
+                              b => 112, },
+                   },
+        fg     => +{ 4  => "bold magenta",
+                     8  => 177,
+                     24 => +{ r => 216,
+                              g => 144,
+                              b => 255, },
+                   }},
+     +{ name   => "magenta",
+        key    => "m",
+        bg     => +{ 4  => "on_magenta",
+                     8  => 53,
+                     24 => +{ r => 112,
+                              g => 0,
+                              b => 112, },
+                   },
+        fg     => +{ 4  => "bold magenta",
+                     8  => 201,
+                     24 => +{ r => 255,
+                              g => 144,
+                              b => 255, },
+                   }},
+     +{ name   => "hot pink",
+        key    => "h",
+        bg     => +{ 4  => "on_magenta",
+                     8  => 89,
+                     24 => +{ r => 112,
+                              g => 0,
+                              b => 96, },
+                   },
+        fg     => +{ 4  => "bold magenta",
+                     8  => 199,
+                     24 => +{ r => 255,
+                              g => 144,
+                              b => 236, },
+                   }},
+     +{ name   => "pink",
+        key    => "p",
+        bg     => +{ 4  => "on_magenta",
+                     8  => 138,
+                     24 => +{ r => 112,
+                              g => 72,
+                              b => 88, },
+                   },
+        fg     => +{ 4  => "bold magenta",
+                     8  => 218,
+                     24 => +{ r => 255,
+                              g => 160,
+                              b => 235, },
+                   }},
+     +{ name   => "purple-red",
+        key    => "e",
+        bg     => +{ 4  => "on_magenta",
+                     8  => 52,
+                     24 => +{ r => 112,
+                              g => 32,
+                              b => 80, },
+                   },
+        fg     => +{ 4  => "bold magenta",
+                     8  => 162,
+                     24 => +{ r => 245,
+                              g => 144,
+                              b => 180, },
+                   }},
+     +{ name   => "brown",
+        key    => "n",
+        bg     => +{ 4  => "on_magenta",
+                     8  => 95,
+                     24 => +{ r => 88,
+                              g => 48,
+                              b => 16, },
+                   },
+        fg     => +{ 4  => "bold magenta",
+                     8  => 178,
+                     24 => +{ r => 235,
+                              g => 172,
+                              b => 144, },
+                   }},
+     +{ name => "slate",
+        bg   => +{ 4  => "on_cyan",
+                   8  => 59,
+                   24 => +{ r => 27,
+                            g => 51,
+                            b => 49,
+                          }},
+        fg   => +{ 4  => "bold cyan",
+                   8  => 151,
+                   24 => +{ r => 146,
+                            g => 173,
+                            b => 171, }},
+      },
+     +{ name => "wheat",
+        bg   => +{ 4  => "on_white",
+                   8  => 179,
+                   24 => +{ r => 112,
+                            g => 93,
+                            b => 56,
+                          }},
+        fg   => +{ 4  => "bold yellow",
+                   8  => 221, # or 229 or 230
+                   24 => +{ r => 255,
+                            g => 230,
+                            b => 188, }}},
+    );
 }
+
+
+42;
