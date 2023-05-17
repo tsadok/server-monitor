@@ -646,7 +646,7 @@ sub dodiffuse {
     $$w{contentsizey} ||= 1 + $$w{ymax} - $$w{y};
     $$w{title}        ||= "Diffuse";
     $$w{fade}         ||= (0.05 + rand(0.5));
-    $$w{paintprob}    ||= 5 + int rand 5;
+    $$w{paintprob}    ||= 5 + int rand 10;
     $$w{fudge}        ||= 65535 + int rand 65535;
     $$w{offset}         = (defined $$w{offset}) ? $$w{offset} : 2; # Allow edges to behave as middle
     $$w{c} ||= 0;
@@ -726,7 +726,7 @@ sub diffuse_diffuse {
                                         (1 * $old[$x + 2][$y - 1]{$color}) +
                                         (2 * $old[$x + 2][$y]{$color})     +
                                         (1 * $old[$x + 2][$y + 1]{$color}))
-                                       / (33 + $$w{fade}));
+                                       / (33 + $$w{fade} || 0.1));
         # Fix floating-point underflow:
         $$w{map}[$x][$y]{$color} = int($$w{map}[$x][$y]{$color} * $$w{fudge}) / $$w{fudge};
       }}}
