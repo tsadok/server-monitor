@@ -19,8 +19,12 @@
 my $thissystem = `hostname` || "Error_$$";
 chomp $thissystem;
 
-my $workdir = "/home/jonadab/monitor";
-my $remote  = "jonadab@" . "cogitation:/home/jonadab/monitor/$thissystem";
+my $workdir = "/home/jonadab/monitor/workdir";
+my @destination =
+  (
+   "jonadab@" . "cogitation:/home/jonadab/monitor/$thissystem",
+   #"jonadab@" . "hippo:/home/jonadab/monitor/$thissystem",
+  );
 
 my $df  = "/bin/df";
 my $scp = "/usr/bin/scp";
@@ -31,31 +35,34 @@ use DateTime;
 use File::Spec::Functions;
 
 my $utcfile = catfile($workdir, "monitor-utc.dat");
-my $utcdest = catfile($remote,  "monitor-utc.dat");
 my $df_file = catfile($workdir, "monitor-df.dat");
-my $df_dest = catfile($remote,  "monitor-df.dat");
 
-print qq[
+for my $remote (@destination) {
+  my $utcdest = catfile($remote,  "monitor-utc.dat");
+  my $df_dest = catfile($remote,  "monitor-df.dat");
+
+  print qq[
 UTC local file:   $utcfile
 UTC destination:  $utcdest
 df local file:    $df_file
 df destination:   $df_dest
 ];
 
-$ENV{PATH} = undef;
+  $ENV{PATH} = undef;
 
-open PIPE, "$df |";
-open DF,  ">", $df_file or die "Cannot write $df_file: $!";
-while (<PIPE>) {
-  print DF $_;
+  open PIPE, "$df |";
+  open DF,  ">", $df_file or die "Cannot write $df_file: $!";
+  while (<PIPE>) {
+    print DF $_;
+  }
+  close PIPE;
+  close DF;
+  system($scp, $df_file, $df_dest);
+
+  my $utc = DateTime->now( time_zone => "UTC" );
+
+  open UTC, ">", $utcfile or die "Cannot write $utcfile: $!";
+  print UTC $utc->ymd() . " at " . $utc->hms() . "\n";
+  close UTC;
+  system($scp, $utcfile, $utcdest);
 }
-close PIPE;
-close DF;
-system($scp, $df_file, $df_dest);
-
-my $utc = DateTime->now( time_zone => "UTC" );
-
-open UTC, ">", $utcfile or die "Cannot write $utcfile: $!";
-print UTC $utc->ymd() . " at " . $utc->hms() . "\n";
-close UTC;
-system($scp, $utcfile, $utcdest);
