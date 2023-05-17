@@ -19,11 +19,12 @@
 my $thissystem = `hostname` || "Error_$$";
 chomp $thissystem;
 
-my $workdir = "/home/jonadab/monitor/workdir";
+my $workdir = "/home/jonadab/monitor-agent";
 my @destination =
   (
-   "jonadab@" . "cogitation:/home/jonadab/monitor/$thissystem",
+   #"jonadab@" . "cogitation:/home/jonadab/monitor/$thissystem",
    #"jonadab@" . "hippo:/home/jonadab/monitor/$thissystem",
+   "jonadab@" . "llama:/home/jonadab/git/monitor/remote-data/$thissystem";
   );
 
 my $df  = "/bin/df";

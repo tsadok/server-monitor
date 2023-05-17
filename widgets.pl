@@ -682,13 +682,15 @@ sub diffuse_draw {
       my $b = diffuse_scale($$w{map}[$mx][$my]{b});
       my $colorname = "diffuse($r,$g,$b)";
       $namedcolor{$colorname} ||= +{ name => $colorname,
-                                     bg   => +{ 4  => "__TRANSPARENT__",
-                                                8  => "__TRANSPARENT__", # TODO: hsv-based closest match?
+                                     bg   => +{ 3  => "black",
+                                                4  => "black",
+                                                8  => 232, # TODO: hsv-based closest match?
                                                 24 => +{ r => $r,
                                                          g => $g,
                                                          b => $b,
                                                        }},
-                                     fg   => +{ 4  => "__default__",
+                                     fg   => +{ 3  => "__default__",
+                                                4  => "__default__",
                                                 8  => "__default__",
                                                 24 => "__default__",
                                               }};
