@@ -7,14 +7,13 @@ use Term::Size;
 use DateTime;
 use File::Spec::Functions;
 use Data::Dumper;
-#use open ':encoding(UTF-8)';
-#use open ":std";
-#use utf8;
+use open ':encoding(UTF-8)';
+use open ":std";
+use utf8;
 
 our (%bigtextfont, $monitorlogfile, @namedcolor, %namedcolor, %option, %magictext);
 require "./logging.pl";
 require "./widgets.pl";
-require "./monitor-bigtextfonts.pl";
 require "./monitor-sitecode.pl";
 
 my %arg = @ARGV;
