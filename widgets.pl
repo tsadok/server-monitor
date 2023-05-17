@@ -684,7 +684,7 @@ sub diffuse_draw {
       $namedcolor{$colorname} ||= +{ name => $colorname,
                                      bg   => +{ 3  => "black",
                                                 4  => "black",
-                                                8  => 232, # TODO: hsv-based closest match?
+                                                8  => rgbto8bit($r,$g,$b),
                                                 24 => +{ r => $r,
                                                          g => $g,
                                                          b => $b,
@@ -899,6 +899,19 @@ sub rgb { # Return terminal code for a 24-bit color.
     . "$ {delimiter}$ {green}$ {delimiter}$ {blue}m";
 }
 
+sub rgbto8bit {
+  # TODO: it might be better to do an hsv-based closest match, which
+  #       would be more likely to get the hue closer.
+  my ($r, $g, $b) = @_;
+  # The r, g, and b parts we've been passed, are intended for 24-bit
+  # color, so they have 8 bits each.  We need to downgrade them to
+  # just 3 bits each, i.e., instead of ranging 0-255, they need to
+  # range only from 0-5.
+  my $threebitr = int($r / 42.6);
+  my $threebitg = int($g / 42.6);
+  my $threebitb = int($b / 42.6);
+  return 16 + (36 * $threebitr) + (6 * $threebitg) + ($threebitb);
+}
 sub bg8 {
   my ($cnum) = @_;
   return eightbitcolorcode($cnum, "bg");
@@ -950,6 +963,10 @@ sub named_colors {
     $$c{bg}{3} ||= $$c{bg}{4};
     $$c{fg}{3} ||= $$c{fg}{4};
     $$c{fg}{3} =~ s/bold\s+//;
+    $$c{bg}{8} ||= rgbto8bit($$c{bg}{24}{r},$$c{bg}{24}{g},$$c{bg}{24}{b})
+      if ref $$c{bg}{24};
+    $$c{fg}{8} ||= rgbto8bit($$c{fg}{24}{r},$$c{fg}{24}{g},$$c{fg}{24}{b})
+      if ref $$c{fg}{24};
     $c;
   } (# In 4-bit (ANSI) mode, all background colors must be in the
      #             0-7 range, and all foreground colors in 8-15.
@@ -987,7 +1004,7 @@ sub named_colors {
      +{ name   => "grey",
         key    => "s", # "silver"
         bg     => +{ 4  => "on_white",
-                     8  => 240,
+                     8  => 236,
                      24 => +{ r => 64,
                               g => 64,
                               b => 64, },
@@ -1002,7 +1019,7 @@ sub named_colors {
      +{ name   => "black",
         key    => "k",
         bg     => +{ 4  => "on_black",
-                     8  => 232,
+                     8  => 16,
                      24 => +{ r => 0,
                               g => 0,
                               b => 0, },
@@ -1023,7 +1040,7 @@ sub named_colors {
                               b => 0, },
                    },
         fg     => +{ 4  => "bold red",
-                     8  => 160,
+                     8  => 196,
                      24 => +{ r => 255,
                               g => 144,
                               b => 144, },
@@ -1111,7 +1128,7 @@ sub named_colors {
                               b => 0, },
                    },
         fg     => +{ 4  => "bold green",
-                     8  => 190,
+                     8  => 120, # 190,
                      24 => +{ r => 144,
                               g => 255,
                               b => 144, },
@@ -1139,7 +1156,7 @@ sub named_colors {
                               b => 112, },
                    },
         fg     => +{ 4  => "bold cyan",
-                     8  => 51,
+                     8  => 123,#51,
                      24 => +{ r => 144,
                               g => 255,
                               b => 255, },
@@ -1147,7 +1164,7 @@ sub named_colors {
      +{ name   => "azure",
         key    => "z",
         bg     => +{ 4  => "on_blue",
-                     8  => 25,
+                     8  => 24,
                      24 => +{ r => 0,
                               g => 85,
                               b => 112, },
@@ -1245,13 +1262,13 @@ sub named_colors {
      +{ name   => "purple-red",
         key    => "e",
         bg     => +{ 4  => "on_magenta",
-                     8  => 52,
+                     8  => 89,#52,
                      24 => +{ r => 112,
                               g => 32,
                               b => 80, },
                    },
         fg     => +{ 4  => "bold magenta",
-                     8  => 162,
+                     8  => 197,#162,
                      24 => +{ r => 245,
                               g => 144,
                               b => 180, },
@@ -1259,7 +1276,7 @@ sub named_colors {
      +{ name   => "brown",
         key    => "n",
         bg     => +{ 4  => "on_magenta",
-                     8  => 95,
+                     8  => 94,#95,
                      24 => +{ r => 88,
                               g => 48,
                               b => 16, },
@@ -1272,7 +1289,7 @@ sub named_colors {
                    }},
      +{ name => "slate",
         bg   => +{ 4  => "on_cyan",
-                   8  => 59,
+                   8  => 23,#59,
                    24 => +{ r => 27,
                             g => 51,
                             b => 49,
@@ -1285,7 +1302,7 @@ sub named_colors {
       },
      +{ name => "wheat",
         bg   => +{ 4  => "on_white",
-                   8  => 179,
+                   8  => 101,#179,
                    24 => +{ r => 112,
                             g => 93,
                             b => 56,

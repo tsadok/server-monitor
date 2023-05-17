@@ -940,7 +940,11 @@ sub doagenda {
           }
         } elsif ($dt->ymd() lt $now->clone()->add( months => 5 )) {
           $when   = $dt->month_abbr() . " " . sprintf("%02d", $dt->mday());
-          $whenfg = $$w{thisyearfg} || $$w{fg};
+          if ($dt->ymd() lt $now->clone()->add( days => 28 )->ymd()) {
+            $whenfg = $$w{thismonthfg} || $$w{thisyearfg} || $$w{fg};
+          } else {
+            $whenfg = $$w{thisyearfg} || $$w{fg};
+          }
         } else {
           $when   = $dt->year() . " " . $dt->month_abbr();
           $whenfg = $$w{distantfg} || $$w{fg};

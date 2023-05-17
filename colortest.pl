@@ -15,6 +15,6 @@ for my $cdepth (4, 8, 24) {
       . $reset . colorcode($c, $cdepth, "bg") . colorcode($white, $cdepth) . " $$c{name} "
       . $reset . colorcode($black, $cdepth, "bg") . colorcode($c, $cdepth) . " $$c{name} "
       . $reset . colorcode($white, $cdepth, "bg") . colorcode($c, $cdepth) . " $$c{name} "
-      . $reset . "\n";
+      . $reset . (($cdepth == 8) ? "($$c{fg}{8} on $$c{bg}{8})" : "") . "\n";
   }
 }
